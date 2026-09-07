@@ -175,23 +175,56 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       const minutes = now.getMinutes();
       const timeVal = hours + minutes / 60;
       
-      // Parse the end time from targetTimeRange (e.g. "07:30-07:45")
-      let limitTimeVal = 9.0; // Default to 9:00 AM
+      // Parse the targetTimeRange to get start and end times for point calculation
+      let startHours = 7, startMinutes = 30; // Default 07:30
+      let endHours = 7, endMinutes = 45; // Default 07:45
+      
       const timeParts = targetTimeRange.split('-');
-      if (timeParts.length > 1) {
-        const endTimeStr = timeParts[1].trim();
-        const endParts = endTimeStr.split(':');
+      if (timeParts.length === 2) {
+        const startParts = timeParts[0].trim().split(':');
+        const endParts = timeParts[1].trim().split(':');
+        
+        if (startParts.length >= 2) {
+          startHours = parseInt(startParts[0], 10);
+          startMinutes = parseInt(startParts[1], 10);
+        }
         if (endParts.length >= 2) {
-          const limitHours = parseInt(endParts[0], 10);
-          const limitMinutes = parseInt(endParts[1], 10);
-          if (!isNaN(limitHours) && !isNaN(limitMinutes)) {
-            limitTimeVal = limitHours + limitMinutes / 60;
-          }
+          endHours = parseInt(endParts[0], 10);
+          endMinutes = parseInt(endParts[1], 10);
         }
       }
       
+      const limitTimeVal = endHours + endMinutes / 60;
+      const startTimeVal = startHours + startMinutes / 60;
+      
       const isOnTime = timeVal <= limitTimeVal;
       const checkInStatus = isOnTime ? 'on-time' : 'late';
+      
+      // Calculate earned points dynamically
+      let earnedPoints = 0;
+      if (status === 'join' && isOnTime) {
+        // Calculate total duration in minutes
+        const totalDurationMinutes = (endHours * 60 + endMinutes) - (startHours * 60 + startMinutes);
+        
+        // Calculate minutes elapsed since start
+        // If they scan before start time, it will be negative, we cap it at 0
+        const elapsedMinutes = Math.max(0, (hours * 60 + minutes) - (startHours * 60 + startMinutes));
+        
+        if (totalDurationMinutes > 0) {
+          const percentageElapsed = elapsedMinutes / totalDurationMinutes;
+          
+          if (percentageElapsed <= 0.33) {
+            earnedPoints = 10; // First 33% (e.g. 0-5 mins of 15 mins)
+          } else if (percentageElapsed <= 0.66) {
+            earnedPoints = 5;  // Middle 33% (e.g. 6-10 mins)
+          } else {
+            earnedPoints = 2;  // Last 34% (e.g. 11-15 mins)
+          }
+        } else {
+          // Fallback if someone enters weird times where start >= end
+          earnedPoints = 5;
+        }
+      }
       
       if (!selectedEmployee) throw new Error("No employee selected");
       const checkInId = `${selectedEmployee.id}_${format(now, 'yyyy-MM-dd')}`;
@@ -204,10 +237,18 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         location: null,
         status: checkInStatus,
         meetingStatus: status,
-        dateStr: format(now, 'yyyy-MM-dd')
+        dateStr: format(now, 'yyyy-MM-dd'),
+        earnedPoints: earnedPoints
       };
 
-      // Fire and forget: ให้ Firebase จัดการอัพโหลดเบื้องหลัง ไม่ต้องรอ
+      // Update total points in employee profile
+      if (earnedPoints > 0) {
+        setDoc(doc(db, 'employees', selectedEmployee.id), {
+          totalPoints: (selectedEmployee.totalPoints || 0) + earnedPoints
+        }, { merge: true }).catch(console.warn);
+      }
+
+      // Fire and forget
       setDoc(doc(db, 'checkins', checkInId), newCheckIn).catch(console.warn);
       
       // Record successful checkin on this device for today
@@ -217,7 +258,12 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       }
       
       setStep('success');
-      setMessage(`เช็คอินสำเร็จ! คุณ${status === 'join' ? 'เข้าร่วม' : 'ไม่เข้าร่วม'}ประชุมเช้า`);
+      
+      if (earnedPoints > 0) {
+        setMessage(`เช็คอินสำเร็จ! คุณเข้าร่วมประชุมเช้า และได้รับ ${earnedPoints} คะแนน 🎉`);
+      } else {
+        setMessage(`เช็คอินสำเร็จ! คุณ${status === 'join' ? 'เข้าร่วม' : 'ไม่เข้าร่วม'}ประชุมเช้า`);
+      }
     } catch (error: any) {
       console.warn(error);
       setStep('success');

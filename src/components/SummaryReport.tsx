@@ -91,6 +91,7 @@ export function SummaryReport() {
       return {
         id: emp.id,
         name: emp.name,
+        totalPoints: emp.totalPoints || 0,
         total: empCheckIns.length,
         onTime,
         late,
@@ -99,7 +100,13 @@ export function SummaryReport() {
       };
     });
     
-    return report.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    // Sort by points descending, then by name
+    return report.sort((a, b) => {
+      if (b.totalPoints !== a.totalPoints) {
+        return (b.totalPoints || 0) - (a.totalPoints || 0);
+      }
+      return a.name.localeCompare(b.name, 'th');
+    });
   };
 
   const reportData = getReportData();
@@ -117,6 +124,7 @@ export function SummaryReport() {
       const exportData = reportData.map((data, index) => ({
         'No.': index + 1,
         'ชื่อ - นามสกุล': data.name,
+        'คะแนนสะสม': data.totalPoints,
         'จำนวนวันเช็คอิน': data.total,
         'ตรงเวลา (วัน)': data.onTime,
         'มาสาย (วัน)': data.late,
@@ -240,6 +248,7 @@ export function SummaryReport() {
                   <tr className="bg-slate-50 border-b border-slate-200 text-sm font-bold text-slate-600 whitespace-nowrap">
                     <th className="py-4 px-4 w-16 text-center">No.</th>
                     <th className="py-4 px-4">ชื่อ - นามสกุล</th>
+                    <th className="py-4 px-4 text-center text-purple-600">คะแนนสะสม 🏆</th>
                     <th className="py-4 px-4 text-center">มา (วัน)</th>
                     <th className="py-4 px-4 text-center text-emerald-600">ตรงเวลา</th>
                     <th className="py-4 px-4 text-center text-amber-600">สาย</th>
@@ -251,8 +260,11 @@ export function SummaryReport() {
                   {reportData.length > 0 ? (
                     reportData.map((data, index) => (
                       <tr key={data.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors">
-                        <td className="py-3 px-4 text-center text-slate-500 font-medium">{index + 1}</td>
+                        <td className="py-3 px-4 text-center text-slate-500 font-medium">
+                          {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}
+                        </td>
                         <td className="py-3 px-4 font-bold text-slate-800">{data.name}</td>
+                        <td className="py-3 px-4 text-center font-bold text-purple-600">{data.totalPoints}</td>
                         <td className="py-3 px-4 text-center font-semibold text-slate-700">{data.total}</td>
                         <td className="py-3 px-4 text-center font-semibold text-emerald-600">{data.onTime > 0 ? data.onTime : '-'}</td>
                         <td className="py-3 px-4 text-center font-semibold text-amber-600">{data.late > 0 ? data.late : '-'}</td>
@@ -262,7 +274,7 @@ export function SummaryReport() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-500">
+                      <td colSpan={8} className="py-8 text-center text-slate-500">
                         ไม่มีข้อมูลพนักงาน
                       </td>
                     </tr>

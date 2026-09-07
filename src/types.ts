@@ -14,6 +14,7 @@ export interface Employee {
   name: string;
   role: Role;
   isActive: boolean;
+  totalPoints?: number;
   createdAt: number;
 }
 
@@ -29,6 +30,7 @@ export interface CheckIn {
   status: 'on-time' | 'late';
   meetingStatus?: 'join' | 'skip';
   dateStr: string; // YYYY-MM-DD for easy querying
+  earnedPoints?: number;
 }
 
 export interface DailySummary {
