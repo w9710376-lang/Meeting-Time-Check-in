@@ -24,17 +24,30 @@ import {
   CheckCircle2,
   Plus,
   X,
+  RotateCcw,
+  History,
 } from 'lucide-react';
 
 export function RoleManager() {
-  const { accounts, profile, departments, addDepartment, removeDepartment } = useAuth();
+  const {
+    accounts,
+    profile,
+    departments,
+    deletedDepartments,
+    addDepartment,
+    removeDepartment,
+    restoreDepartment,
+    clearDeletedDepartmentHistory,
+  } = useAuth();
   const isSuperAdmin = profile?.appRole === 'super_admin';
   const [activeSubTab, setActiveSubTab] = useState<'accounts' | 'employees'>('accounts');
 
-  // Add/Delete Department Form State
+  // Add/Delete/Rollback Department Form State
   const [newDeptCode, setNewDeptCode] = useState('');
   const [newDeptDefaultPin, setNewDeptDefaultPin] = useState('1234');
   const [confirmDeleteDept, setConfirmDeleteDept] = useState<Department | null>(null);
+  const [lastDeletedDept, setLastDeletedDept] = useState<Department | null>(null);
+  const [restoringDept, setRestoringDept] = useState<Department | null>(null);
 
   // New Account Form State
   const [newName, setNewName] = useState('');
@@ -72,11 +85,11 @@ export function RoleManager() {
     return () => unsub();
   }, []);
 
-  const showSavedMessage = (msg: string) => {
+  const showSavedMessage = (msg: string, durationMs = 3500) => {
     setSavedBanner(msg);
     setTimeout(() => {
-      setSavedBanner(null);
-    }, 2500);
+      setSavedBanner((prev) => (prev === msg ? null : prev));
+    }, durationMs);
   };
 
   // Automatically set default permissions when selecting role preset in Add Form
@@ -99,6 +112,9 @@ export function RoleManager() {
     }
     setNewDeptCode('');
     setNewDeptDefaultPin('1234');
+    if (lastDeletedDept && res.dept && lastDeletedDept.toUpperCase() === res.dept.toUpperCase()) {
+      setLastDeletedDept(null);
+    }
     showSavedMessage(`เพิ่มแผนก "${res.dept}" และสร้างบัญชีประจำแผนกเรียบร้อยแล้ว`);
   };
 
@@ -110,7 +126,32 @@ export function RoleManager() {
       showSavedMessage(res.error || 'ไม่สามารถลบแผนกได้');
       return;
     }
-    showSavedMessage(`ลบแผนก "${deptName}" และบัญชีประจำแผนกออกจากระบบเรียบร้อยแล้ว`);
+    setLastDeletedDept(deptName);
+    showSavedMessage(
+      `ลบแผนก "${deptName}" แล้ว (ข้อมูลพนักงานและคะแนนสะสมยังปลอดภัย สามารถกดปุ่ม Rollback เพื่อกู้คืนได้ทันที)`,
+      8000
+    );
+  };
+
+  const handleRollbackDepartment = async (deptName: Department) => {
+    if (!isSuperAdmin) return;
+    setRestoringDept(deptName);
+    try {
+      const res = await restoreDepartment(deptName);
+      if (!res.success) {
+        showSavedMessage(res.error || 'ไม่สามารถกู้คืนแผนกได้');
+        return;
+      }
+      if (lastDeletedDept && lastDeletedDept.toUpperCase() === deptName.toUpperCase()) {
+        setLastDeletedDept(null);
+      }
+      showSavedMessage(
+        `Rollback กู้คืนแผนก "${res.dept}" พร้อมบัญชี PIN เดิมและรายชื่อพนักงานกลับมาครบถ้วนแล้ว`,
+        5000
+      );
+    } finally {
+      setRestoringDept(null);
+    }
   };
 
   const handleAddAccount = async (e: React.FormEvent) => {
@@ -306,9 +347,30 @@ export function RoleManager() {
       </div>
 
       {savedBanner && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl text-sm font-semibold flex items-center space-x-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-          <span>{savedBanner}</span>
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 px-4 py-3 rounded-xl text-sm font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>{savedBanner}</span>
+          </div>
+          {isSuperAdmin &&
+            lastDeletedDept &&
+            deletedDepartments.some(
+              (d) => d.deptName.toUpperCase() === lastDeletedDept.toUpperCase()
+            ) && (
+              <button
+                type="button"
+                onClick={() => handleRollbackDepartment(lastDeletedDept)}
+                disabled={restoringDept === lastDeletedDept}
+                className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-emerald-400 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap self-start sm:self-auto shadow-sm"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>
+                  {restoringDept === lastDeletedDept
+                    ? 'กำลังกู้คืน...'
+                    : `กดเพื่อ Rollback กู้คืนแผนก ${lastDeletedDept} ทันที`}
+                </span>
+              </button>
+            )}
         </div>
       )}
 
@@ -323,7 +385,7 @@ export function RoleManager() {
                   <span>จัดการรายชื่อแผนกทั้งหมด ({departments.length} แผนก)</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  เฉพาะ <strong>Super Admin (ผู้ดูแลระบบกลาง)</strong> เท่านั้นที่สามารถเพิ่มหรือลบแผนกในระบบได้
+                  เฉพาะ <strong>Super Admin (ผู้ดูแลระบบกลาง)</strong> เท่านั้นที่สามารถเพิ่ม ลบ หรือกด Rollback กู้คืนแผนกในระบบได้
                 </p>
               </div>
               <span className="inline-flex items-center space-x-1.5 px-3 py-1 bg-slate-900 text-white rounded-lg text-xs font-bold self-start sm:self-auto">
@@ -335,6 +397,9 @@ export function RoleManager() {
             <div className="flex flex-wrap items-center gap-2">
               {departments.map((dept) => {
                 const isConfirming = confirmDeleteDept === dept;
+                const deptEmpCount = employees.filter(
+                  (e) => (e.department || 'IE').toUpperCase() === dept.toUpperCase()
+                ).length;
                 return (
                   <div
                     key={dept}
@@ -345,6 +410,9 @@ export function RoleManager() {
                     }`}
                   >
                     <span>แผนก {dept}</span>
+                    <span className="text-[11px] font-normal text-slate-500 tabular-nums">
+                      ({deptEmpCount} คน)
+                    </span>
                     {isSuperAdmin && departments.length > 1 && (
                       isConfirming ? (
                         <span className="inline-flex items-center space-x-1 ml-1.5">
@@ -353,7 +421,7 @@ export function RoleManager() {
                             onClick={() => handleConfirmRemoveDepartment(dept)}
                             className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-[11px] font-bold"
                           >
-                            ยืนยันลบ
+                            ยืนยันลบ (กู้คืนได้)
                           </button>
                           <button
                             type="button"
@@ -380,45 +448,136 @@ export function RoleManager() {
             </div>
 
             {isSuperAdmin ? (
-              <form
-                onSubmit={handleAddNewDepartment}
-                className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end pt-2 border-t border-slate-100"
-              >
-                <div className="sm:col-span-6">
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    ชื่อย่อ / ชื่อแผนกใหม่ที่ต้องการเพิ่ม
-                  </label>
-                  <input
-                    type="text"
-                    value={newDeptCode}
-                    onChange={(e) => setNewDeptCode(e.target.value)}
-                    placeholder="เช่น QA, QC, PE, HR, IT"
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+              <div className="space-y-4 pt-2 border-t border-slate-100">
+                <form
+                  onSubmit={handleAddNewDepartment}
+                  className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+                >
+                  <div className="sm:col-span-6">
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      ชื่อย่อ / ชื่อแผนกใหม่ที่ต้องการเพิ่ม
+                    </label>
+                    <input
+                      type="text"
+                      value={newDeptCode}
+                      onChange={(e) => setNewDeptCode(e.target.value)}
+                      placeholder="เช่น QA, QC, PE, HR, IT"
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="sm:col-span-4">
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      รหัส PIN เริ่มต้นของแผนกใหม่
+                    </label>
+                    <input
+                      type="text"
+                      value={newDeptDefaultPin}
+                      onChange={(e) => setNewDeptDefaultPin(e.target.value)}
+                      placeholder="เช่น 1234"
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono font-bold outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <button
+                      type="submit"
+                      disabled={!newDeptCode.trim()}
+                      className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-xl text-sm transition-colors inline-flex items-center justify-center gap-1 whitespace-nowrap"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>เพิ่มแผนก</span>
+                    </button>
+                  </div>
+                </form>
+
+                {/* Rollback / Recently Deleted Departments Section */}
+                <div className="pt-3 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-2 text-xs font-bold text-slate-700">
+                      <History className="w-4 h-4 text-amber-600" />
+                      <span>
+                        ระบบ Rollback กู้คืนแผนกที่ถูกลบ ({deletedDepartments.length} รายการ)
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">
+                      กู้คืนรายชื่อพนักงาน คะแนนสะสม และรหัส PIN เดิมได้ 100%
+                    </span>
+                  </div>
+
+                  {deletedDepartments.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      {deletedDepartments.map((item) => {
+                        const empCount = employees.filter(
+                          (e) =>
+                            (e.department || 'IE').toUpperCase() === item.deptName.toUpperCase()
+                        ).length;
+                        const savedPins =
+                          item.accounts && item.accounts.length > 0
+                            ? item.accounts.map((a) => a.pin).join(', ')
+                            : '1234';
+                        const deletedTimeStr = new Date(item.deletedAt).toLocaleString('th-TH', {
+                          day: '2-digit',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        });
+                        const isRestoring = restoringDept === item.deptName;
+
+                        return (
+                          <div
+                            key={item.deptName}
+                            className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-amber-50/70 border border-amber-200/90"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                                <span>แผนก {item.deptName}</span>
+                                <span className="text-slate-400">·</span>
+                                <span className="text-amber-800 font-semibold tabular-nums">
+                                  พนักงาน {empCount} คน
+                                </span>
+                                <span className="text-slate-400">·</span>
+                                <span className="font-mono text-slate-600 tabular-nums">
+                                  PIN: {savedPins}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                                ลบเมื่อ {deletedTimeStr}
+                                {item.deletedBy ? ` · โดย ${item.deletedBy}` : ''}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleRollbackDepartment(item.deptName)}
+                                disabled={isRestoring}
+                                className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap shadow-sm"
+                                title={`กู้คืนแผนก ${item.deptName} กลับเข้าสู่ระบบ`}
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>{isRestoring ? 'กำลังกู้คืน...' : 'Rollback กู้คืน'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => clearDeletedDepartmentHistory(item.deptName)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                title="ล้างรายการนี้ออกจากประวัติ"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs text-slate-500 flex items-center justify-between">
+                      <span>
+                        ยังไม่มีประวัติแผนกที่ถูกลบ — หากเผลอกดลบแผนกผิด รายชื่อแผนกจะถูกเก็บสำรองไว้ที่นี่เพื่อให้กดปุ่ม <strong>Rollback กู้คืน</strong> ได้ทันทีโดยที่ข้อมูลพนักงานไม่สูญหาย
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="sm:col-span-4">
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    รหัส PIN เริ่มต้นของแผนกใหม่
-                  </label>
-                  <input
-                    type="text"
-                    value={newDeptDefaultPin}
-                    onChange={(e) => setNewDeptDefaultPin(e.target.value)}
-                    placeholder="เช่น 1234"
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono font-bold outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <button
-                    type="submit"
-                    disabled={!newDeptCode.trim()}
-                    className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-xl text-sm transition-colors inline-flex items-center justify-center gap-1 whitespace-nowrap"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>เพิ่มแผนก</span>
-                  </button>
-                </div>
-              </form>
+              </div>
             ) : (
               <div className="pt-2 border-t border-slate-100 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
                 บัญชีของคุณไม่ใช่ Super Admin (ผู้ดูแลระบบกลาง) จึงไม่สามารถเพิ่มหรือลบแผนกได้
@@ -457,7 +616,6 @@ export function RoleManager() {
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="dept_manager">บัญชีประจำแผนก (Department)</option>
-                  <option value="super_admin">Super Admin (ผู้ดูแลระบบสูงสุด)</option>
                   <option value="qr_kiosk">QR Kiosk (จุดแสดง QR Code)</option>
                 </select>
               </div>
@@ -554,19 +712,25 @@ export function RoleManager() {
                         </td>
 
                         <td className="py-3.5 px-4">
-                          <select
-                            value={acc.appRole}
-                            onChange={(e) =>
-                              handleUpdateAccountField(acc, {
-                                appRole: e.target.value as AppRole,
-                              })
-                            }
-                            className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-800 border border-slate-200 outline-none cursor-pointer hover:bg-slate-200"
-                          >
-                            <option value="super_admin">Super Admin</option>
-                            <option value="dept_manager">ประจำแผนก</option>
-                            <option value="qr_kiosk">QR Kiosk</option>
-                          </select>
+                          {acc.appRole === 'super_admin' ? (
+                            <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-900 text-white">
+                              <Shield className="w-3.5 h-3.5 text-blue-400" />
+                              <span>Super Admin (1 เดียว)</span>
+                            </span>
+                          ) : (
+                            <select
+                              value={acc.appRole}
+                              onChange={(e) =>
+                                handleUpdateAccountField(acc, {
+                                  appRole: e.target.value as AppRole,
+                                })
+                              }
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-800 border border-slate-200 outline-none cursor-pointer hover:bg-slate-200"
+                            >
+                              <option value="dept_manager">ประจำแผนก</option>
+                              <option value="qr_kiosk">QR Kiosk</option>
+                            </select>
+                          )}
                         </td>
 
                         <td className="py-3.5 px-4 text-center">

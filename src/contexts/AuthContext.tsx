@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { collection, deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { User, Role, UserAccount, DEFAULT_DEPARTMENTS, Department } from '../types';
+import { User, Role, UserAccount, DEFAULT_DEPARTMENTS, Department, DeletedDepartmentBackup } from '../types';
 
 export const DEFAULT_ACCOUNTS: UserAccount[] = [
   {
@@ -55,11 +55,14 @@ interface AuthContextType {
   profile: User | null;
   accounts: UserAccount[];
   departments: Department[];
+  deletedDepartments: DeletedDepartmentBackup[];
   loading: boolean;
   loginWithAccount: (accountId: string, pin: string) => Promise<{ success: boolean; error?: string }>;
   loginAs: (name: string, role: Role) => Promise<void>;
   addDepartment: (deptName: string, pin?: string) => Promise<{ success: boolean; dept?: string; error?: string }>;
   removeDepartment: (deptName: string) => Promise<{ success: boolean; error?: string }>;
+  restoreDepartment: (deptName: string) => Promise<{ success: boolean; dept?: string; error?: string }>;
+  clearDeletedDepartmentHistory: (deptName: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -96,6 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfileState] = useState<User | null>(null);
   const [accounts, setAccounts] = useState<UserAccount[]>(DEFAULT_ACCOUNTS);
   const [departments, setDepartments] = useState<Department[]>(DEFAULT_DEPARTMENTS);
+  const [deletedDepartments, setDeletedDepartments] = useState<DeletedDepartmentBackup[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -118,6 +122,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       async (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
+          if (Array.isArray(data.deletedList)) {
+            setDeletedDepartments(data.deletedList);
+          } else {
+            setDeletedDepartments([]);
+          }
           if (Array.isArray(data.list) && data.list.length > 0) {
             setDepartments(data.list);
             return;
@@ -127,7 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           await setDoc(
             doc(db, 'settings', 'departments'),
-            { list: DEFAULT_DEPARTMENTS, updatedAt: Date.now() },
+            { list: DEFAULT_DEPARTMENTS, deletedList: [], updatedAt: Date.now() },
             { merge: true }
           );
         } catch (err) {
@@ -143,12 +152,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsubAccounts = onSnapshot(
       collection(db, 'accounts'),
       async (snapshot) => {
-        const loaded: UserAccount[] = [];
+        const rawLoaded: UserAccount[] = [];
         snapshot.forEach((docSnap) => {
           const raw = docSnap.data() as UserAccount;
           const cleanName = sanitizeAccountName(raw.name || '');
           const accObj: UserAccount = { ...raw, id: docSnap.id, name: cleanName };
-          loaded.push(accObj);
+          rawLoaded.push(accObj);
 
           // Automatically migrate old "หัวหน้าแผนก ..." names in Firestore to "แผนก ..."
           if (raw.name && raw.name !== cleanName) {
@@ -158,7 +167,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         });
 
-        if (loaded.length === 0 && !snapshot.metadata.hasPendingWrites) {
+        // Ensure there is only 1 Super Admin (ผู้ดูแลระบบกลาง) in the system
+        const deduplicated: UserAccount[] = [];
+        let primarySuperAdmin: UserAccount | null =
+          rawLoaded.find((a) => a.id === 'super-admin' && a.appRole === 'super_admin') || null;
+
+        for (const acc of rawLoaded) {
+          // If a department manager account (mgr-*) was accidentally set to super_admin, restore it to dept_manager
+          if (acc.id.startsWith('mgr-') && acc.appRole === 'super_admin') {
+            const inferredDept = acc.id.replace(/^mgr-/, '').toUpperCase() || 'IE';
+            const restoredAcc: UserAccount = {
+              ...acc,
+              name: acc.name.startsWith('แผนก ') ? acc.name : `แผนก ${inferredDept}`,
+              role: 'manager',
+              appRole: 'dept_manager',
+              departmentScope: inferredDept,
+              canManageRoles: false,
+            };
+            deduplicated.push(restoredAcc);
+            setDoc(doc(db, 'accounts', acc.id), restoredAcc, { merge: true }).catch(() => {});
+            continue;
+          }
+
+          if (acc.appRole === 'super_admin') {
+            if (!primarySuperAdmin) {
+              primarySuperAdmin = {
+                ...acc,
+                name: 'Super Admin (ผู้ดูแลระบบกลาง)',
+                departmentScope: 'ALL',
+              };
+              deduplicated.push(primarySuperAdmin);
+            } else if (acc.id === primarySuperAdmin.id) {
+              const normalizedPrimary: UserAccount = {
+                ...acc,
+                name: 'Super Admin (ผู้ดูแลระบบกลาง)',
+                departmentScope: 'ALL',
+              };
+              deduplicated.push(normalizedPrimary);
+              if (acc.name !== 'Super Admin (ผู้ดูแลระบบกลาง)' || acc.departmentScope !== 'ALL') {
+                setDoc(
+                  doc(db, 'accounts', acc.id),
+                  { name: 'Super Admin (ผู้ดูแลระบบกลาง)', departmentScope: 'ALL' },
+                  { merge: true }
+                ).catch(() => {});
+              }
+            } else {
+              // Extra duplicate Super Admin account -> remove from Firestore so only 1 Super Admin exists
+              deleteDoc(doc(db, 'accounts', acc.id)).catch(() => {});
+            }
+            continue;
+          }
+
+          deduplicated.push(acc);
+        }
+
+        if (deduplicated.length === 0 && !snapshot.metadata.hasPendingWrites) {
           // Seed default accounts
           try {
             await Promise.all(
@@ -168,16 +231,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             console.warn('Could not seed default accounts:', err);
           }
           setAccounts(DEFAULT_ACCOUNTS);
-        } else if (loaded.length > 0) {
-          loaded.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-          setAccounts(loaded);
+        } else if (deduplicated.length > 0) {
+          deduplicated.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+          setAccounts(deduplicated);
 
           // If current logged-in user matches one of the accounts, sync their latest permissions
           const currentSessionStr = localStorage.getItem('timesync_auth_session');
           if (currentSessionStr) {
             try {
               const currentSession = JSON.parse(currentSessionStr) as User;
-              const matched = loaded.find((a) => a.id === currentSession.id);
+              const matched =
+                deduplicated.find((a) => a.id === currentSession.id) ||
+                (currentSession.appRole === 'super_admin'
+                  ? deduplicated.find((a) => a.appRole === 'super_admin')
+                  : undefined);
               if (matched) {
                 if (!matched.isActive) {
                   setProfileState(null);
@@ -228,12 +295,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const updatedDepts = [...departments, cleaned];
+    const updatedDeletedDepts = deletedDepartments.filter(
+      (item) => item.deptName.toUpperCase() !== cleaned
+    );
     setDepartments(updatedDepts);
+    setDeletedDepartments(updatedDeletedDepts);
 
     try {
       await setDoc(
         doc(db, 'settings', 'departments'),
-        { list: updatedDepts, updatedAt: Date.now() },
+        { list: updatedDepts, deletedList: updatedDeletedDepts, updatedAt: Date.now() },
         { merge: true }
       );
 
@@ -287,22 +358,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
+    const originalIndex = departments.indexOf(deptName);
+    const deptAccounts = accounts.filter(
+      (a) =>
+        a.appRole !== 'super_admin' &&
+        a.departmentScope.toUpperCase() === deptName.toUpperCase()
+    );
+
+    const backupEntry: DeletedDepartmentBackup = {
+      deptName,
+      deletedAt: Date.now(),
+      deletedBy: profile.name || 'Super Admin',
+      originalIndex: originalIndex >= 0 ? originalIndex : departments.length,
+      accounts: deptAccounts,
+    };
+
     const updatedDepts = departments.filter((d) => d !== deptName);
+    const updatedDeletedDepts = [
+      backupEntry,
+      ...deletedDepartments.filter(
+        (item) => item.deptName.toUpperCase() !== deptName.toUpperCase()
+      ),
+    ].slice(0, 20);
+
     setDepartments(updatedDepts);
+    setDeletedDepartments(updatedDeletedDepts);
 
     try {
       await setDoc(
         doc(db, 'settings', 'departments'),
-        { list: updatedDepts, updatedAt: Date.now() },
+        { list: updatedDepts, deletedList: updatedDeletedDepts, updatedAt: Date.now() },
         { merge: true }
       );
 
-      // Also remove corresponding department login accounts so they don't appear in Login
-      const deptAccounts = accounts.filter(
-        (a) =>
-          a.appRole === 'dept_manager' &&
-          a.departmentScope.toUpperCase() === deptName.toUpperCase()
-      );
+      // Remove corresponding department login accounts from active Login list (backed up in deletedList for Rollback)
       await Promise.all(
         deptAccounts.map((acc) => deleteDoc(doc(db, 'accounts', acc.id)).catch(() => {}))
       );
@@ -311,6 +400,104 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error('Error removing department:', err);
       return { success: false, error: 'เกิดข้อผิดพลาดในการลบแผนก' };
+    }
+  };
+
+  const restoreDepartment = async (
+    deptName: string
+  ): Promise<{ success: boolean; dept?: string; error?: string }> => {
+    if (!profile || profile.appRole !== 'super_admin') {
+      return {
+        success: false,
+        error: 'เฉพาะ Super Admin (ผู้ดูแลระบบกลาง) เท่านั้นที่สามารถ Rollback กู้คืนแผนกได้',
+      };
+    }
+
+    const cleaned = deptName.trim().toUpperCase();
+    if (!cleaned) {
+      return { success: false, error: 'ไม่พบชื่อแผนกที่ต้องการกู้คืน' };
+    }
+
+    const backupEntry = deletedDepartments.find(
+      (item) => item.deptName.toUpperCase() === cleaned
+    );
+    const canonicalName = backupEntry?.deptName || cleaned;
+
+    const updatedDepts = [...departments];
+    if (!updatedDepts.some((d) => d.toUpperCase() === cleaned)) {
+      const insertIdx =
+        backupEntry?.originalIndex !== undefined
+          ? Math.max(0, Math.min(backupEntry.originalIndex, updatedDepts.length))
+          : updatedDepts.length;
+      updatedDepts.splice(insertIdx, 0, canonicalName);
+    }
+
+    const updatedDeletedDepts = deletedDepartments.filter(
+      (item) => item.deptName.toUpperCase() !== cleaned
+    );
+
+    setDepartments(updatedDepts);
+    setDeletedDepartments(updatedDeletedDepts);
+
+    try {
+      await setDoc(
+        doc(db, 'settings', 'departments'),
+        { list: updatedDepts, deletedList: updatedDeletedDepts, updatedAt: Date.now() },
+        { merge: true }
+      );
+
+      if (backupEntry && Array.isArray(backupEntry.accounts) && backupEntry.accounts.length > 0) {
+        await Promise.all(
+          backupEntry.accounts.map((acc) => setDoc(doc(db, 'accounts', acc.id), acc))
+        );
+      } else {
+        const safeSlug = canonicalName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+        const accId = `mgr-${safeSlug}`;
+        const existingAcc = accounts.find(
+          (a) => a.id === accId || a.departmentScope.toUpperCase() === cleaned
+        );
+        if (!existingAcc) {
+          const defaultRestoredAcc: UserAccount = {
+            id: accId,
+            username: `dept_${safeSlug}`,
+            name: `แผนก ${canonicalName}`,
+            pin: '1234',
+            role: 'manager',
+            appRole: 'dept_manager',
+            departmentScope: canonicalName,
+            canEditTime: true,
+            canManageEmployees: true,
+            canViewReports: true,
+            canManageRoles: false,
+            isActive: true,
+            createdAt: Date.now(),
+          };
+          await setDoc(doc(db, 'accounts', accId), defaultRestoredAcc);
+        }
+      }
+
+      return { success: true, dept: canonicalName };
+    } catch (err) {
+      console.error('Error restoring department:', err);
+      return { success: false, error: 'เกิดข้อผิดพลาดในการกู้คืนแผนก' };
+    }
+  };
+
+  const clearDeletedDepartmentHistory = async (deptName: string): Promise<void> => {
+    if (!profile || profile.appRole !== 'super_admin') return;
+    const cleaned = deptName.trim().toUpperCase();
+    const updatedDeletedDepts = deletedDepartments.filter(
+      (item) => item.deptName.toUpperCase() !== cleaned
+    );
+    setDeletedDepartments(updatedDeletedDepts);
+    try {
+      await setDoc(
+        doc(db, 'settings', 'departments'),
+        { deletedList: updatedDeletedDepts, updatedAt: Date.now() },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error('Error clearing deleted department history:', err);
     }
   };
 
@@ -392,11 +579,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profile,
         accounts,
         departments,
+        deletedDepartments,
         loading,
         loginWithAccount,
         loginAs,
         addDepartment,
         removeDepartment,
+        restoreDepartment,
+        clearDeletedDepartmentHistory,
         logout,
       }}
     >

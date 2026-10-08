@@ -307,67 +307,7 @@ export function Dashboard() {
       </div>
 
       <div className="grid grid-cols-12 gap-6">
-        {/* Department QR Code Card on Dashboard */}
-        <div className="col-span-12 md:col-span-6 xl:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <QrCode className="w-5 h-5 text-blue-600" />
-                <h3 className="font-bold text-slate-800 text-base">QR Code เช็คอิน ({activeQrDept})</h3>
-              </div>
-              <span className="text-xs font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-700">
-                รอสแกน {qrDeptMissingCount} คน
-              </span>
-            </div>
-
-            {!scopedDept && departments.length > 1 && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {departments.map((dept) => (
-                  <button
-                    key={dept}
-                    type="button"
-                    onClick={() => handleSelectQrDept(dept)}
-                    className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                      activeQrDept === dept
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    {dept}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col items-center my-auto py-2">
-            <div
-              onClick={() => setIsQrExpanded(true)}
-              title="คลิกเพื่อขยาย QR Code ให้ใหญ่"
-              className="w-40 h-40 bg-white rounded-2xl border-2 border-slate-200 hover:border-blue-500 p-3 shadow-sm flex items-center justify-center relative cursor-pointer group transition-all"
-            >
-              {qrUrl && <QRCode value={qrUrl} size={136} className="w-full h-full text-slate-900" />}
-              <div className="absolute top-2 right-2 bg-slate-900/80 group-hover:bg-blue-600 text-white p-1.5 rounded-lg shadow transition-colors">
-                <Maximize2 className="w-3.5 h-3.5" />
-              </div>
-            </div>
-            <p className="text-xs text-slate-500 mt-2 flex items-center gap-1 font-medium">
-              <Clock className="w-3.5 h-3.5 text-blue-500" />
-              <span>เวลาเข้าประชุม ({activeQrDept}): <strong className="text-slate-700">{activeQrTimeRange} น.</strong></span>
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsQrExpanded(true)}
-            className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 transition-colors"
-          >
-            <Maximize2 className="w-4 h-4 text-blue-400" />
-            <span>ขยาย QR Code ให้ใหญ่</span>
-          </button>
-        </div>
-
-        <div className="col-span-12 md:col-span-6 xl:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
+        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
           <h3 className="font-bold text-slate-800 text-lg mb-4">สถิติการประชุมเช้า ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -392,7 +332,7 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="col-span-12 md:col-span-6 xl:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
+        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-800 text-lg">พนักงานที่ยังไม่เช็คอิน</h3>
             <span className="bg-rose-100 text-rose-800 text-xs font-bold px-2 py-1 rounded-md">
@@ -421,7 +361,7 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="col-span-12 md:col-span-6 xl:col-span-3 h-96">
+        <div className="col-span-12 lg:col-span-4 h-96">
           <Leaderboard checkIns={filteredCheckIns} monthlyPointsMap={monthlyPointsMap} />
         </div>
       </div>

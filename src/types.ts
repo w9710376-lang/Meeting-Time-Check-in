@@ -22,6 +22,14 @@ export interface UserAccount {
   createdAt: number;
 }
 
+export interface DeletedDepartmentBackup {
+  deptName: Department;
+  deletedAt: number;
+  deletedBy?: string;
+  originalIndex?: number;
+  accounts: UserAccount[];
+}
+
 export interface User {
   id: string;
   email: string;
