@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { CheckIn, Employee, Department, DEPARTMENTS } from '../types';
+import { CheckIn, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths } from 'date-fns';
 import { th } from 'date-fns/locale';
@@ -12,17 +12,18 @@ import * as XLSX from 'xlsx';
 type Period = 'weekly' | 'monthly';
 
 export function SummaryReport() {
-  const { profile } = useAuth();
+  const { profile, departments } = useAuth();
   const scopedDept =
     profile?.departmentScope && profile.departmentScope !== 'ALL'
       ? profile.departmentScope
       : null;
 
-  const [period, setPeriod] = useState<Period>('weekly');
+  const [period, setPeriod] = useState<Period>('monthly');
   const [referenceDate, setReferenceDate] = useState<Date>(new Date());
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
+  const [monthlyCheckIns, setMonthlyCheckIns] = useState<CheckIn[]>([]);
   const [selectedDept, setSelectedDept] = useState<'ALL' | Department>(scopedDept || 'ALL');
 
   useEffect(() => {
@@ -39,6 +40,27 @@ export function SummaryReport() {
 
     return () => unsubEmp();
   }, []);
+
+  // Always fetch check-ins for the entire month of referenceDate to compute monthly accumulated points
+  const monthKey = format(referenceDate, 'yyyy-MM');
+  useEffect(() => {
+    const mStart = format(startOfMonth(referenceDate), 'yyyy-MM-dd');
+    const mEnd = format(endOfMonth(referenceDate), 'yyyy-MM-dd');
+
+    const monthQ = query(
+      collection(db, 'checkins'),
+      where('dateStr', '>=', mStart),
+      where('dateStr', '<=', mEnd)
+    );
+
+    const unsubMonth = onSnapshot(monthQ, (snapshot) => {
+      const data: CheckIn[] = [];
+      snapshot.forEach(doc => data.push(doc.data() as CheckIn));
+      setMonthlyCheckIns(data);
+    }, console.warn);
+
+    return () => unsubMonth();
+  }, [monthKey]);
 
   useEffect(() => {
     setLoading(true);
@@ -92,6 +114,8 @@ export function SummaryReport() {
     setReferenceDate(new Date());
   };
 
+  const monthShortLabel = format(referenceDate, 'MMM yyyy', { locale: th });
+
   const getReportData = () => {
     const filteredEmps = selectedDept === 'ALL'
       ? employees
@@ -99,6 +123,8 @@ export function SummaryReport() {
 
     const report = filteredEmps.map(emp => {
       const empCheckIns = checkIns.filter(c => c.userId === emp.id);
+      const empMonthlyCheckIns = monthlyCheckIns.filter(c => c.userId === emp.id);
+      const monthlyPoints = empMonthlyCheckIns.reduce((sum, c) => sum + (c.earnedPoints || 0), 0);
       const onTime = empCheckIns.filter(c => c.status === 'on-time').length;
       const late = empCheckIns.filter(c => c.status === 'late').length;
       const joinMeeting = empCheckIns.filter(c => c.meetingStatus === 'join').length;
@@ -108,7 +134,7 @@ export function SummaryReport() {
         id: emp.id,
         name: emp.name,
         department: emp.department || 'IE',
-        totalPoints: emp.totalPoints || 0,
+        totalPoints: monthlyPoints,
         total: empCheckIns.length,
         onTime,
         late,
@@ -117,7 +143,7 @@ export function SummaryReport() {
       };
     });
     
-    // Sort by points descending, then by name
+    // Sort by monthly points descending, then by name
     return report.sort((a, b) => {
       if (b.totalPoints !== a.totalPoints) {
         return (b.totalPoints || 0) - (a.totalPoints || 0);
@@ -142,7 +168,7 @@ export function SummaryReport() {
         'No.': index + 1,
         'ชื่อ - นามสกุล': data.name,
         'แผนก': data.department,
-        'คะแนนสะสม': data.totalPoints,
+        [`คะแนนสะสมรายเดือน (${monthShortLabel})`]: data.totalPoints,
         'จำนวนวันเช็คอิน': data.total,
         'ตรงเวลา (วัน)': data.onTime,
         'มาสาย (วัน)': data.late,
@@ -180,7 +206,7 @@ export function SummaryReport() {
                 ทุกแผนก
               </button>
             )}
-            {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => (
+            {(scopedDept ? [scopedDept] : departments).map(dept => (
               <button
                 key={dept}
                 onClick={() => setSelectedDept(dept)}
@@ -188,7 +214,7 @@ export function SummaryReport() {
                   selectedDept === dept ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                {scopedDept ? `เฉพาะแผนก ${dept}` : dept}
+                {scopedDept ? `แผนก ${dept}` : dept}
               </button>
             ))}
           </div>
@@ -270,9 +296,14 @@ export function SummaryReport() {
 
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="p-6 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <h3 className="font-bold text-slate-800 text-lg flex items-center">
-                <Calendar className="w-5 h-5 mr-2 text-blue-500" /> รายงานสรุปรายบุคคล ({selectedDept === 'ALL' ? 'ทุกแผนก' : `แผนก ${selectedDept}`})
-              </h3>
+              <div>
+                <h3 className="font-bold text-slate-800 text-lg flex items-center">
+                  <Calendar className="w-5 h-5 mr-2 text-blue-500" /> รายงานสรุปรายบุคคล ({selectedDept === 'ALL' ? 'ทุกแผนก' : `แผนก ${selectedDept}`})
+                </h3>
+                <p className="text-xs text-purple-600 font-semibold mt-1">
+                  * คะแนนสะสมคิดเฉพาะรายเดือน ({monthShortLabel}) และเริ่มต้นนับใหม่ทุกต้นเดือน
+                </p>
+              </div>
               <button
                 onClick={handleExport}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-sm transition-colors"
@@ -289,7 +320,7 @@ export function SummaryReport() {
                     <th className="py-4 px-4 w-16 text-center">No.</th>
                     <th className="py-4 px-4">ชื่อ - นามสกุล</th>
                     <th className="py-4 px-4 text-center">แผนก</th>
-                    <th className="py-4 px-4 text-center text-purple-600">คะแนนสะสม 🏆</th>
+                    <th className="py-4 px-4 text-center text-purple-600">คะแนนสะสมรายเดือน ({monthShortLabel}) 🏆</th>
                     <th className="py-4 px-4 text-center">มา (วัน)</th>
                     <th className="py-4 px-4 text-center text-emerald-600">ตรงเวลา</th>
                     <th className="py-4 px-4 text-center text-amber-600">สาย</th>

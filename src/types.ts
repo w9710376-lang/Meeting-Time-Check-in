@@ -1,9 +1,10 @@
 export type Role = 'employee' | 'manager';
 export type AppRole = 'super_admin' | 'dept_manager' | 'qr_kiosk';
-export type Department = 'IE' | 'EE' | 'ME' | 'MES' | 'MER';
+export type Department = string;
 export type DepartmentScope = 'ALL' | Department;
 
-export const DEPARTMENTS: Department[] = ['IE', 'EE', 'ME', 'MES', 'MER'];
+export const DEFAULT_DEPARTMENTS: Department[] = ['IE', 'EE', 'ME', 'MES', 'MER'];
+export const DEPARTMENTS: Department[] = DEFAULT_DEPARTMENTS;
 
 export interface UserAccount {
   id: string;
@@ -43,6 +44,7 @@ export interface Employee {
   department?: Department;
   isActive: boolean;
   totalPoints?: number;
+  pointsMonth?: string; // YYYY-MM for monthly point accumulation reset
   createdAt: number;
 }
 

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { collection, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { User, Role, UserAccount, DEPARTMENTS } from '../types';
+import { User, Role, UserAccount, DEFAULT_DEPARTMENTS, Department } from '../types';
 
 export const DEFAULT_ACCOUNTS: UserAccount[] = [
   {
@@ -19,10 +19,10 @@ export const DEFAULT_ACCOUNTS: UserAccount[] = [
     isActive: true,
     createdAt: 1700000000000,
   },
-  ...DEPARTMENTS.map((dept, idx) => ({
+  ...DEFAULT_DEPARTMENTS.map((dept, idx) => ({
     id: `mgr-${dept.toLowerCase()}`,
-    username: `mgr_${dept.toLowerCase()}`,
-    name: `หัวหน้าแผนก ${dept}`,
+    username: `dept_${dept.toLowerCase()}`,
+    name: `แผนก ${dept}`,
     pin: `${idx + 1}${idx + 1}${idx + 1}${idx + 1}`,
     role: 'manager' as Role,
     appRole: 'dept_manager' as const,
@@ -54,19 +54,32 @@ export const DEFAULT_ACCOUNTS: UserAccount[] = [
 interface AuthContextType {
   profile: User | null;
   accounts: UserAccount[];
+  departments: Department[];
   loading: boolean;
   loginWithAccount: (accountId: string, pin: string) => Promise<{ success: boolean; error?: string }>;
   loginAs: (name: string, role: Role) => Promise<void>;
+  addDepartment: (deptName: string, pin?: string) => Promise<{ success: boolean; dept?: string; error?: string }>;
+  removeDepartment: (deptName: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function sanitizeAccountName(name: string): string {
+  if (name === 'Super Admin (ทุกแผนก)') {
+    return 'Super Admin (ผู้ดูแลระบบกลาง)';
+  }
+  if (name.startsWith('หัวหน้าแผนก ')) {
+    return name.replace('หัวหน้าแผนก ', 'แผนก ');
+  }
+  return name;
+}
+
 function accountToUser(acc: UserAccount): User {
   return {
     id: acc.id,
     email: `${acc.username}@timesync.local`,
-    name: acc.name,
+    name: sanitizeAccountName(acc.name),
     role: acc.role,
     appRole: acc.appRole,
     departmentScope: acc.departmentScope,
@@ -82,6 +95,7 @@ function accountToUser(acc: UserAccount): User {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfileState] = useState<User | null>(null);
   const [accounts, setAccounts] = useState<UserAccount[]>(DEFAULT_ACCOUNTS);
+  const [departments, setDepartments] = useState<Department[]>(DEFAULT_DEPARTMENTS);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -90,6 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (storedSession) {
       try {
         const parsed = JSON.parse(storedSession) as User;
+        parsed.name = sanitizeAccountName(parsed.name || '');
         setProfileState(parsed);
       } catch (e) {
         localStorage.removeItem('timesync_auth_session');
@@ -97,13 +112,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     setLoading(false);
 
-    // 2. Subscribe to accounts collection in Firestore
+    // 2. Subscribe to departments list in Firestore (settings/departments)
+    const unsubDepts = onSnapshot(
+      doc(db, 'settings', 'departments'),
+      async (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (Array.isArray(data.list) && data.list.length > 0) {
+            setDepartments(data.list);
+            return;
+          }
+        }
+        // Seed default departments if not present
+        try {
+          await setDoc(
+            doc(db, 'settings', 'departments'),
+            { list: DEFAULT_DEPARTMENTS, updatedAt: Date.now() },
+            { merge: true }
+          );
+        } catch (err) {
+          // Offline fallback
+        }
+      },
+      (err) => {
+        console.warn('Using default departments list:', err.message);
+      }
+    );
+
+    // 3. Subscribe to accounts collection in Firestore
     const unsubAccounts = onSnapshot(
       collection(db, 'accounts'),
       async (snapshot) => {
         const loaded: UserAccount[] = [];
         snapshot.forEach((docSnap) => {
-          loaded.push({ ...(docSnap.data() as UserAccount), id: docSnap.id });
+          const raw = docSnap.data() as UserAccount;
+          const cleanName = sanitizeAccountName(raw.name || '');
+          const accObj: UserAccount = { ...raw, id: docSnap.id, name: cleanName };
+          loaded.push(accObj);
+
+          // Automatically migrate old "หัวหน้าแผนก ..." names in Firestore to "แผนก ..."
+          if (raw.name && raw.name !== cleanName) {
+            setDoc(doc(db, 'accounts', docSnap.id), { name: cleanName }, { merge: true }).catch(
+              () => {}
+            );
+          }
         });
 
         if (loaded.length === 0 && !snapshot.metadata.hasPendingWrites) {
@@ -147,8 +199,120 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     );
 
-    return () => unsubAccounts();
+    return () => {
+      unsubDepts();
+      unsubAccounts();
+    };
   }, []);
+
+  const addDepartment = async (
+    rawDeptName: string,
+    pin: string = '1234'
+  ): Promise<{ success: boolean; dept?: string; error?: string }> => {
+    if (!profile || profile.appRole !== 'super_admin') {
+      return {
+        success: false,
+        error: 'เฉพาะ Super Admin (ผู้ดูแลระบบกลาง) เท่านั้นที่สามารถเพิ่มแผนกได้',
+      };
+    }
+
+    const cleaned = rawDeptName.trim().toUpperCase();
+    if (!cleaned) {
+      return { success: false, error: 'กรุณาระบุชื่อแผนก' };
+    }
+    if (cleaned === 'ALL') {
+      return { success: false, error: 'ไม่สามารถใช้ชื่อ ALL เป็นชื่อแผนกได้' };
+    }
+    if (departments.some((d) => d.toUpperCase() === cleaned)) {
+      return { success: false, error: `มีแผนก ${cleaned} อยู่ในระบบแล้ว` };
+    }
+
+    const updatedDepts = [...departments, cleaned];
+    setDepartments(updatedDepts);
+
+    try {
+      await setDoc(
+        doc(db, 'settings', 'departments'),
+        { list: updatedDepts, updatedAt: Date.now() },
+        { merge: true }
+      );
+
+      // Also create a corresponding department account if not exists
+      const safeSlug = cleaned.toLowerCase().replace(/[^a-z0-9]/g, '-');
+      const accId = `mgr-${safeSlug}`;
+      const existingAcc = accounts.find(
+        (a) => a.id === accId || a.departmentScope.toUpperCase() === cleaned
+      );
+
+      if (!existingAcc) {
+        const newAcc: UserAccount = {
+          id: accId,
+          username: `dept_${safeSlug}`,
+          name: `แผนก ${cleaned}`,
+          pin: pin.trim() || '1234',
+          role: 'manager',
+          appRole: 'dept_manager',
+          departmentScope: cleaned,
+          canEditTime: true,
+          canManageEmployees: true,
+          canViewReports: true,
+          canManageRoles: false,
+          isActive: true,
+          createdAt: Date.now(),
+        };
+        await setDoc(doc(db, 'accounts', accId), newAcc);
+      }
+
+      return { success: true, dept: cleaned };
+    } catch (err) {
+      console.error('Error adding department:', err);
+      return { success: true, dept: cleaned };
+    }
+  };
+
+  const removeDepartment = async (
+    deptName: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!profile || profile.appRole !== 'super_admin') {
+      return {
+        success: false,
+        error: 'เฉพาะ Super Admin (ผู้ดูแลระบบกลาง) เท่านั้นที่สามารถลบแผนกได้',
+      };
+    }
+
+    if (departments.length <= 1) {
+      return {
+        success: false,
+        error: 'ต้องเหลืออย่างน้อย 1 แผนกในระบบ',
+      };
+    }
+
+    const updatedDepts = departments.filter((d) => d !== deptName);
+    setDepartments(updatedDepts);
+
+    try {
+      await setDoc(
+        doc(db, 'settings', 'departments'),
+        { list: updatedDepts, updatedAt: Date.now() },
+        { merge: true }
+      );
+
+      // Also remove corresponding department login accounts so they don't appear in Login
+      const deptAccounts = accounts.filter(
+        (a) =>
+          a.appRole === 'dept_manager' &&
+          a.departmentScope.toUpperCase() === deptName.toUpperCase()
+      );
+      await Promise.all(
+        deptAccounts.map((acc) => deleteDoc(doc(db, 'accounts', acc.id)).catch(() => {}))
+      );
+
+      return { success: true };
+    } catch (err) {
+      console.error('Error removing department:', err);
+      return { success: false, error: 'เกิดข้อผิดพลาดในการลบแผนก' };
+    }
+  };
 
   const loginWithAccount = async (
     accountId: string,
@@ -196,7 +360,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       canViewReports: role === 'manager',
       canManageRoles: role === 'manager',
       earlyPoints: 0,
-      createdAt: Date.now()
+      createdAt: Date.now(),
     };
 
     try {
@@ -223,7 +387,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ profile, accounts, loading, loginWithAccount, loginAs, logout }}>
+    <AuthContext.Provider
+      value={{
+        profile,
+        accounts,
+        departments,
+        loading,
+        loginWithAccount,
+        loginAs,
+        addDepartment,
+        removeDepartment,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

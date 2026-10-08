@@ -1,43 +1,72 @@
 import React, { useState, useEffect } from 'react';
 import { doc, setDoc, collection, query, onSnapshot, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { CheckIn as CheckInType, Employee, Department, DEPARTMENTS } from '../types';
+import { CheckIn as CheckInType, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import QRCode from 'react-qr-code';
-import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2 } from 'lucide-react';
+import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2, Plus, X, Maximize2, Minimize2 } from 'lucide-react';
 
 type Step = 'scan' | 'select-name' | 'meeting' | 'processing' | 'success' | 'error';
 
 export function CheckIn({ onComplete }: { onComplete?: () => void }) {
-  const { profile } = useAuth();
+  const { profile, departments, addDepartment, removeDepartment } = useAuth();
   const [currentTime, setCurrentTime] = useState(new Date());
   const searchParams = new URLSearchParams(window.location.search);
   const isScanMode = searchParams.get('mode') === 'scan';
   const urlScanTime = searchParams.get('t');
   const urlDept = searchParams.get('dept') as Department | null;
 
+  const isSuperAdmin = !isScanMode && profile?.appRole === 'super_admin';
   const scopedDept: Department | null =
     !isScanMode && profile?.departmentScope && profile.departmentScope !== 'ALL'
       ? profile.departmentScope
       : null;
+  const lockedDept: Department | null = isScanMode && urlDept ? urlDept : scopedDept;
+  const visibleDepartments: Department[] = lockedDept ? [lockedDept] : departments;
   const canEditTime = !isScanMode && (profile?.canEditTime ?? true);
 
-  const initialDept: Department = (urlDept && DEPARTMENTS.includes(urlDept))
-    ? urlDept
-    : scopedDept
-    ? scopedDept
-    : ((localStorage.getItem('selected_checkin_dept') as Department) || 'IE');
+  const initialDept: Department = lockedDept
+    ? lockedDept
+    : ((localStorage.getItem('selected_checkin_dept') as Department) || departments[0] || 'IE');
 
-  const [selectedDept, setSelectedDept] = useState<Department>(
-    DEPARTMENTS.includes(initialDept) ? initialDept : 'IE'
-  );
+  const [selectedDept, setSelectedDept] = useState<Department>(initialDept || 'IE');
+  const [isAddingDept, setIsAddingDept] = useState(false);
+  const [newDeptInput, setNewDeptInput] = useState('');
+  const [confirmDeleteDept, setConfirmDeleteDept] = useState<Department | null>(null);
 
   useEffect(() => {
-    if (scopedDept) {
-      setSelectedDept(scopedDept);
+    if (lockedDept) {
+      setSelectedDept(lockedDept);
     }
-  }, [scopedDept]);
+  }, [lockedDept]);
+
+  const handleQuickAddDept = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSuperAdmin || !newDeptInput.trim()) return;
+    const res = await addDepartment(newDeptInput);
+    if (res.success && res.dept) {
+      setSelectedDept(res.dept);
+      if (!isScanMode) {
+        localStorage.setItem('selected_checkin_dept', res.dept);
+      }
+    }
+    setNewDeptInput('');
+    setIsAddingDept(false);
+  };
+
+  const handleQuickDeleteDept = async (deptToDelete: Department) => {
+    if (!isSuperAdmin || departments.length <= 1) return;
+    const res = await removeDepartment(deptToDelete);
+    if (res.success) {
+      if (selectedDept === deptToDelete) {
+        const nextDept = departments.find((d) => d !== deptToDelete) || 'IE';
+        setSelectedDept(nextDept);
+        localStorage.setItem('selected_checkin_dept', nextDept);
+      }
+      setConfirmDeleteDept(null);
+    }
+  };
 
   // Real-time employee list
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -64,6 +93,18 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   const [editTimeValue, setEditTimeValue] = useState(targetTimeRange);
   
   const [appUrl, setAppUrl] = useState('');
+  const [isQrExpanded, setIsQrExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!isQrExpanded) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsQrExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isQrExpanded]);
 
   // Keep editTimeValue synced when switching departments
   useEffect(() => {
@@ -71,8 +112,15 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   }, [selectedDept, deptTimeRanges, defaultTimeRange]);
 
   const handleDeptChange = (dept: Department) => {
+    if (lockedDept && dept !== lockedDept) return;
     setSelectedDept(dept);
     setIsEditingTime(false);
+    setSelectedEmployee(null);
+    setMeetingStatus(null);
+    setSearchQuery('');
+    if (step === 'meeting') {
+      setStep('select-name');
+    }
     if (!isScanMode) {
       localStorage.setItem('selected_checkin_dept', dept);
     }
@@ -302,10 +350,14 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         earnedPoints: earnedPoints
       };
 
-      // Update total points in employee profile
-      if (earnedPoints > 0) {
+      // Update monthly accumulated points in employee profile (resets automatically each new month)
+      const currentMonthStr = format(now, 'yyyy-MM');
+      const previousMonthlyPoints =
+        selectedEmployee.pointsMonth === currentMonthStr ? (selectedEmployee.totalPoints || 0) : 0;
+      if (earnedPoints > 0 || selectedEmployee.pointsMonth !== currentMonthStr) {
         setDoc(doc(db, 'employees', selectedEmployee.id), {
-          totalPoints: (selectedEmployee.totalPoints || 0) + earnedPoints
+          totalPoints: previousMonthlyPoints + earnedPoints,
+          pointsMonth: currentMonthStr
         }, { merge: true }).catch(console.warn);
       }
 
@@ -368,7 +420,9 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   };
 
   // Filter active employees by selected department and search query
-  const deptEmployees = employees.filter(emp => (emp.department || 'IE') === selectedDept);
+  const deptEmployees = employees.filter(
+    emp => (emp.department || 'IE').trim().toUpperCase() === selectedDept.trim().toUpperCase()
+  );
   const filteredEmployees = deptEmployees
     .filter(emp => !checkedInIds.has(emp.id))
     .filter(emp => emp.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -379,23 +433,110 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         <h2 className="text-2xl font-bold tracking-tight">Meeting Time Check-in</h2>
 
         {/* Department Selector Tabs */}
-        <div className="mt-4 flex justify-center">
-          <div className="inline-flex bg-slate-800 p-1 rounded-xl border border-slate-700 gap-1">
-            {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => (
-              <button
-                key={dept}
-                type="button"
-                onClick={() => handleDeptChange(dept)}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                  selectedDept === dept
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700/60'
-                }`}
-              >
-                { scopedDept ? `แผนก ${dept}` : dept }
-              </button>
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <div className="inline-flex flex-wrap justify-center items-center bg-slate-800 p-1 rounded-xl border border-slate-700 gap-1">
+            {visibleDepartments.map(dept => (
+              <div key={dept} className="inline-flex items-center">
+                <button
+                  type="button"
+                  onClick={() => handleDeptChange(dept)}
+                  disabled={Boolean(lockedDept)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1.5 ${
+                    selectedDept === dept
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-700/60'
+                  }`}
+                >
+                  <span>{lockedDept ? `แผนก ${dept}` : dept}</span>
+                  {isSuperAdmin && !lockedDept && departments.length > 1 && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDeleteDept(dept);
+                        setIsAddingDept(false);
+                      }}
+                      className={`p-0.5 rounded hover:bg-rose-500 hover:text-white transition-colors ${
+                        selectedDept === dept ? 'text-blue-200' : 'text-slate-500'
+                      }`}
+                      title={`ลบแผนก ${dept} (เฉพาะ Super Admin)`}
+                    >
+                      <X className="w-3 h-3" />
+                    </span>
+                  )}
+                </button>
+              </div>
             ))}
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddingDept(!isAddingDept);
+                  setConfirmDeleteDept(null);
+                }}
+                className="px-2.5 py-1 rounded-lg text-xs font-bold text-blue-400 hover:text-white hover:bg-slate-700/60 transition-all inline-flex items-center gap-1"
+                title="เพิ่มแผนกใหม่ (เฉพาะ Super Admin)"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>เพิ่มแผนก</span>
+              </button>
+            )}
           </div>
+
+          {confirmDeleteDept && isSuperAdmin && (
+            <div className="inline-flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-xl border border-rose-500/60 text-xs">
+              <span className="text-slate-200 font-semibold">
+                ยืนยันลบแผนก <strong className="text-rose-400">{confirmDeleteDept}</strong>?
+              </span>
+              <button
+                type="button"
+                onClick={() => handleQuickDeleteDept(confirmDeleteDept)}
+                className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg transition-colors"
+              >
+                ยืนยันลบ
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteDept(null)}
+                className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-300 font-bold rounded-lg transition-colors"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          )}
+
+          {isAddingDept && isSuperAdmin && (
+            <form
+              onSubmit={handleQuickAddDept}
+              className="inline-flex items-center space-x-1.5 bg-slate-800 px-2.5 py-1.5 rounded-xl border border-blue-500/60"
+            >
+              <input
+                type="text"
+                value={newDeptInput}
+                onChange={(e) => setNewDeptInput(e.target.value)}
+                placeholder="ชื่อแผนกใหม่ (เช่น QA, PE)"
+                className="bg-transparent text-white text-xs font-bold outline-none w-36 placeholder:text-slate-500"
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="bg-blue-600 hover:bg-blue-500 text-white rounded-lg p-1 transition-colors"
+                title="บันทึกแผนกใหม่"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddingDept(false);
+                  setNewDeptInput('');
+                }}
+                className="text-slate-400 hover:text-white p-1 transition-colors"
+                title="ยกเลิก"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          )}
         </div>
 
         <div className="mt-5 flex justify-center items-center space-x-2 text-5xl font-bold text-white tabular-nums tracking-tighter">
@@ -455,9 +596,24 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                   <Building2 className="w-3.5 h-3.5 mr-1.5" />
                   QR Code สำหรับแผนก {selectedDept} (รอเช็คอิน {filteredEmployees.length} คน)
                 </div>
-                <div className="w-64 h-64 bg-white rounded-2xl mb-6 relative overflow-hidden border-2 border-slate-200 shadow-sm flex items-center justify-center p-5">
+                <div
+                  onClick={() => setIsQrExpanded(true)}
+                  title="คลิกเพื่อขยาย QR Code ให้ใหญ่"
+                  className="w-64 h-64 bg-white rounded-2xl mb-3 relative overflow-hidden border-2 border-slate-200 hover:border-blue-500 shadow-sm flex items-center justify-center p-5 cursor-pointer group transition-all"
+                >
                   {appUrl && <QRCode value={appUrl} size={220} className="w-full h-full text-slate-800" />}
+                  <div className="absolute top-2.5 right-2.5 bg-slate-900/80 group-hover:bg-blue-600 text-white p-1.5 rounded-lg shadow transition-colors">
+                    <Maximize2 className="w-4 h-4" />
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setIsQrExpanded(true)}
+                  className="mb-5 inline-flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold rounded-xl shadow-sm transition-all"
+                >
+                  <Maximize2 className="w-4 h-4 text-blue-400" />
+                  <span>ขยาย QR Code ให้ใหญ่</span>
+                </button>
                 <h3 className="text-lg font-bold text-slate-900">สแกน QR Code แผนก {selectedDept}</h3>
                 <p className="text-slate-500 text-sm mt-1 text-center mb-6">นำกล้องจ่อที่ QR Code หน้าห้องประชุมเพื่อเช็คอินเข้าแผนก {selectedDept}</p>
                 
@@ -620,6 +776,93 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         )}
       </div>
       
+      {/* Expanded QR Code Modal */}
+      {isQrExpanded && step === 'scan' && isCheckInOpen() && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setIsQrExpanded(false)}
+        >
+          <div
+            className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-2xl w-full overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-slate-900 px-6 py-5 text-white border-b-4 border-blue-500 flex items-center justify-between">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-bold bg-blue-600 text-white mb-1">
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>แผนก {selectedDept}</span>
+                </div>
+                <h3 className="text-xl font-bold tracking-tight">สแกน QR Code เช็คอินเข้าประชุมเช้า</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  เวลาเข้าประชุม ({selectedDept}): <strong className="text-white">{targetTimeRange} น.</strong> • รอเช็คอิน <strong className="text-amber-400">{filteredEmployees.length} คน</strong>
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-right hidden sm:block">
+                  <div className="text-3xl font-bold tabular-nums tracking-tight">
+                    {format(currentTime, 'HH:mm')}
+                    <span className="text-blue-400 text-xl">:{format(currentTime, 'ss')}</span>
+                  </div>
+                  <div className="text-xs text-slate-400 font-semibold">{format(currentTime, 'EEE, MMM d')}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsQrExpanded(false)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                  title="ปิดหน้าต่างขยาย (ESC)"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            {!lockedDept && visibleDepartments.length > 1 && (
+              <div className="bg-slate-100 px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-center gap-1.5">
+                <span className="text-xs font-bold text-slate-500 mr-1">เลือกแผนก:</span>
+                {visibleDepartments.map((dept) => (
+                  <button
+                    key={dept}
+                    type="button"
+                    onClick={() => handleDeptChange(dept)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      selectedDept === dept
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {dept}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="p-6 sm:p-8 bg-slate-50 flex flex-col items-center">
+              <div className="w-[min(76vw,420px)] h-[min(76vw,420px)] bg-white rounded-3xl p-6 border-4 border-blue-500 shadow-xl flex items-center justify-center">
+                {appUrl && <QRCode value={appUrl} size={380} className="w-full h-full text-slate-900" />}
+              </div>
+
+              <div className="mt-5 text-center">
+                <p className="text-base font-bold text-slate-800">
+                  นำกล้องโทรศัพท์สแกน QR Code เพื่อเช็คอินแผนก <span className="text-blue-600">{selectedDept}</span>
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  ระบบรีเฟรชรหัสความปลอดภัยอัตโนมัติทุก 10 วินาที
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsQrExpanded(false)}
+                className="mt-6 inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-sm transition-colors"
+              >
+                <Minimize2 className="w-4 h-4 text-blue-400" />
+                <span>ย่อขนาด QR Code</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom CSS for scanner animation */}
       <style dangerouslySetInnerHTML={{__html: `
         @keyframes scan {

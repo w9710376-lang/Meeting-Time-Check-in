@@ -119,11 +119,10 @@ export function Layout() {
               <p className="text-sm font-semibold truncate">{profile?.name}</p>
               <p className="text-xs text-slate-400 truncate">
                 {profile?.appRole === 'super_admin'
-                  ? 'Super Admin'
+                  ? 'Super Admin (ผู้ดูแลระบบกลาง)'
                   : profile?.appRole === 'dept_manager'
-                  ? 'Dept Manager'
-                  : 'QR Kiosk'}{' '}
-                · {scopeLabel}
+                  ? scopeLabel
+                  : 'QR Kiosk'}
               </p>
             </div>
           </div>

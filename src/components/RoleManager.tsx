@@ -7,7 +7,7 @@ import {
   AppRole,
   Department,
   DepartmentScope,
-  DEPARTMENTS,
+  DEFAULT_DEPARTMENTS,
   Employee,
   Role,
 } from '../types';
@@ -22,11 +22,19 @@ import {
   Search,
   Lock,
   CheckCircle2,
+  Plus,
+  X,
 } from 'lucide-react';
 
 export function RoleManager() {
-  const { accounts, profile } = useAuth();
+  const { accounts, profile, departments, addDepartment, removeDepartment } = useAuth();
+  const isSuperAdmin = profile?.appRole === 'super_admin';
   const [activeSubTab, setActiveSubTab] = useState<'accounts' | 'employees'>('accounts');
+
+  // Add/Delete Department Form State
+  const [newDeptCode, setNewDeptCode] = useState('');
+  const [newDeptDefaultPin, setNewDeptDefaultPin] = useState('1234');
+  const [confirmDeleteDept, setConfirmDeleteDept] = useState<Department | null>(null);
 
   // New Account Form State
   const [newName, setNewName] = useState('');
@@ -77,8 +85,32 @@ export function RoleManager() {
     if (role === 'super_admin') {
       setNewDeptScope('ALL');
     } else if (role === 'dept_manager' && newDeptScope === 'ALL') {
-      setNewDeptScope('IE');
+      setNewDeptScope(departments[0] || 'IE');
     }
+  };
+
+  const handleAddNewDepartment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSuperAdmin || !newDeptCode.trim()) return;
+    const res = await addDepartment(newDeptCode, newDeptDefaultPin);
+    if (!res.success) {
+      showSavedMessage(res.error || 'ไม่สามารถเพิ่มแผนกได้');
+      return;
+    }
+    setNewDeptCode('');
+    setNewDeptDefaultPin('1234');
+    showSavedMessage(`เพิ่มแผนก "${res.dept}" และสร้างบัญชีประจำแผนกเรียบร้อยแล้ว`);
+  };
+
+  const handleConfirmRemoveDepartment = async (deptName: Department) => {
+    if (!isSuperAdmin) return;
+    const res = await removeDepartment(deptName);
+    setConfirmDeleteDept(null);
+    if (!res.success) {
+      showSavedMessage(res.error || 'ไม่สามารถลบแผนกได้');
+      return;
+    }
+    showSavedMessage(`ลบแผนก "${deptName}" และบัญชีประจำแผนกออกจากระบบเรียบร้อยแล้ว`);
   };
 
   const handleAddAccount = async (e: React.FormEvent) => {
@@ -237,10 +269,10 @@ export function RoleManager() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-900">
-            ตั้งค่า Role และสิทธิ์การเข้าใช้งาน (Role & Access Control)
+            ตั้งค่าแผนก, Role และสิทธิ์การเข้าใช้งาน (Department & Role Control)
           </h1>
           <p className="text-sm text-slate-500">
-            กำหนดรหัสผ่าน (PIN), ขอบเขตแผนก (IE, EE, ME, MES, MER) และสิทธิ์ของหัวหน้าแผนกหรือพนักงาน
+            เพิ่มแผนกใหม่ ({departments.join(', ')}), กำหนดรหัสผ่าน (PIN) และตั้งค่าสิทธิ์การใช้งานของแต่ละแผนก
           </p>
         </div>
 
@@ -282,23 +314,135 @@ export function RoleManager() {
 
       {activeSubTab === 'accounts' ? (
         <div className="space-y-6">
+          {/* Manage Departments Card */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 flex items-center space-x-2">
+                  <Building2 className="w-5 h-5 text-blue-600" />
+                  <span>จัดการรายชื่อแผนกทั้งหมด ({departments.length} แผนก)</span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  เฉพาะ <strong>Super Admin (ผู้ดูแลระบบกลาง)</strong> เท่านั้นที่สามารถเพิ่มหรือลบแผนกในระบบได้
+                </p>
+              </div>
+              <span className="inline-flex items-center space-x-1.5 px-3 py-1 bg-slate-900 text-white rounded-lg text-xs font-bold self-start sm:self-auto">
+                <Shield className="w-3.5 h-3.5 text-blue-400" />
+                <span>สิทธิ์เฉพาะ Super Admin (ผู้ดูแลระบบกลาง)</span>
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {departments.map((dept) => {
+                const isConfirming = confirmDeleteDept === dept;
+                return (
+                  <div
+                    key={dept}
+                    className={`inline-flex items-center space-x-1.5 px-3 py-1.5 border rounded-xl text-xs font-bold transition-colors ${
+                      isConfirming
+                        ? 'bg-rose-50 border-rose-300 text-rose-800'
+                        : 'bg-blue-50 border-blue-200 text-blue-800'
+                    }`}
+                  >
+                    <span>แผนก {dept}</span>
+                    {isSuperAdmin && departments.length > 1 && (
+                      isConfirming ? (
+                        <span className="inline-flex items-center space-x-1 ml-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmRemoveDepartment(dept)}
+                            className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-[11px] font-bold"
+                          >
+                            ยืนยันลบ
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteDept(null)}
+                            className="px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-md text-[11px] font-bold"
+                          >
+                            ยกเลิก
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteDept(dept)}
+                          className="text-blue-400 hover:text-rose-600 transition-colors ml-1"
+                          title={`ลบแผนก ${dept}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {isSuperAdmin ? (
+              <form
+                onSubmit={handleAddNewDepartment}
+                className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end pt-2 border-t border-slate-100"
+              >
+                <div className="sm:col-span-6">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    ชื่อย่อ / ชื่อแผนกใหม่ที่ต้องการเพิ่ม
+                  </label>
+                  <input
+                    type="text"
+                    value={newDeptCode}
+                    onChange={(e) => setNewDeptCode(e.target.value)}
+                    placeholder="เช่น QA, QC, PE, HR, IT"
+                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="sm:col-span-4">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    รหัส PIN เริ่มต้นของแผนกใหม่
+                  </label>
+                  <input
+                    type="text"
+                    value={newDeptDefaultPin}
+                    onChange={(e) => setNewDeptDefaultPin(e.target.value)}
+                    placeholder="เช่น 1234"
+                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono font-bold outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <button
+                    type="submit"
+                    disabled={!newDeptCode.trim()}
+                    className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-xl text-sm transition-colors inline-flex items-center justify-center gap-1 whitespace-nowrap"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>เพิ่มแผนก</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="pt-2 border-t border-slate-100 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+                บัญชีของคุณไม่ใช่ Super Admin (ผู้ดูแลระบบกลาง) จึงไม่สามารถเพิ่มหรือลบแผนกได้
+              </div>
+            )}
+          </div>
+
           {/* Add New Login Account Card */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <h2 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
               <UserPlus className="w-5 h-5 text-blue-600" />
-              <span>เพิ่มบัญชีผู้ใช้งาน / หัวหน้าแผนกใหม่</span>
+              <span>เพิ่มบัญชีผู้ใช้งาน / บัญชีประจำแผนกเพิ่มเติม</span>
             </h2>
 
             <form onSubmit={handleAddAccount} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
               <div className="md:col-span-4">
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  ชื่อบัญชี / ชื่อผู้ใช้งาน
+                  ชื่อบัญชี / ชื่อแผนก
                 </label>
                 <input
                   type="text"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder="เช่น หัวหน้าแผนก IE (คุณสมชาย)"
+                  placeholder="เช่น แผนก IE, แผนก QA"
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -312,7 +456,7 @@ export function RoleManager() {
                   onChange={(e) => handlePresetRoleChange(e.target.value as AppRole)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="dept_manager">Department Manager (หัวหน้าแผนก)</option>
+                  <option value="dept_manager">บัญชีประจำแผนก (Department)</option>
                   <option value="super_admin">Super Admin (ผู้ดูแลระบบสูงสุด)</option>
                   <option value="qr_kiosk">QR Kiosk (จุดแสดง QR Code)</option>
                 </select>
@@ -329,7 +473,7 @@ export function RoleManager() {
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
                 >
                   <option value="ALL">ทุกแผนก (ALL)</option>
-                  {DEPARTMENTS.map((d) => (
+                  {departments.map((d) => (
                     <option key={d} value={d}>
                       แผนก {d}
                     </option>
@@ -420,7 +564,7 @@ export function RoleManager() {
                             className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-800 border border-slate-200 outline-none cursor-pointer hover:bg-slate-200"
                           >
                             <option value="super_admin">Super Admin</option>
-                            <option value="dept_manager">Dept Manager</option>
+                            <option value="dept_manager">ประจำแผนก</option>
                             <option value="qr_kiosk">QR Kiosk</option>
                           </select>
                         </td>
@@ -436,7 +580,7 @@ export function RoleManager() {
                             className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 outline-none cursor-pointer hover:bg-blue-100"
                           >
                             <option value="ALL">ทุกแผนก (ALL)</option>
-                            {DEPARTMENTS.map((dept) => (
+                            {departments.map((dept) => (
                               <option key={dept} value={dept}>
                                 แผนก {dept}
                               </option>
@@ -627,7 +771,7 @@ export function RoleManager() {
               >
                 ทุกแผนก
               </button>
-              {DEPARTMENTS.map((dept) => (
+              {departments.map((dept) => (
                 <button
                   key={dept}
                   type="button"
@@ -684,7 +828,7 @@ export function RoleManager() {
                         }
                         className="px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 outline-none cursor-pointer"
                       >
-                        {DEPARTMENTS.map((d) => (
+                        {departments.map((d) => (
                           <option key={d} value={d}>
                             {d}
                           </option>

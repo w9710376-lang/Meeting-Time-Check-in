@@ -1,21 +1,37 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { UserAccount } from '../types';
-import { Lock, Shield, Building2, QrCode, Eye, EyeOff, ArrowRight, AlertCircle, KeyRound } from 'lucide-react';
+import {
+  Lock,
+  Shield,
+  Building2,
+  QrCode,
+  Eye,
+  EyeOff,
+  ArrowRight,
+  AlertCircle,
+  KeyRound,
+} from 'lucide-react';
 
 export function Login() {
-  const { accounts, loginWithAccount } = useAuth();
+  const { accounts, departments, loginWithAccount } = useAuth();
   const activeAccounts = accounts.filter((a) => a.isActive);
 
+  // Default to first department account (e.g. แผนก IE) or first active account
+  const defaultAcc =
+    activeAccounts.find((a) => a.appRole === 'dept_manager') || activeAccounts[0];
+
   const [selectedAccountId, setSelectedAccountId] = useState<string>(
-    activeAccounts[0]?.id || 'super-admin'
+    defaultAcc?.id || 'mgr-ie'
   );
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [roleFilter, setRoleFilter] = useState<'ALL' | 'super_admin' | 'dept_manager' | 'qr_kiosk'>('ALL');
+  const [roleFilter, setRoleFilter] = useState<
+    'ALL' | 'dept_manager' | 'super_admin' | 'qr_kiosk'
+  >('ALL');
 
   const selectedAccount =
     activeAccounts.find((a) => a.id === selectedAccountId) || activeAccounts[0];
@@ -52,34 +68,55 @@ export function Login() {
     setPin((prev) => (prev.length < 12 ? prev + digit : prev));
   };
 
-  const getRoleLabel = (appRole: UserAccount['appRole']) => {
-    if (appRole === 'super_admin') return 'Super Admin · จัดการทุกแผนก & ตั้งค่า Role';
-    if (appRole === 'dept_manager') return 'Department Manager · หัวหน้าประจำแผนก';
+  const getRoleLabel = (acc: UserAccount) => {
+    if (acc.appRole === 'super_admin')
+      return 'Super Admin (ผู้ดูแลระบบกลาง) · เพิ่ม/ลบแผนก & ตั้งค่า Role';
+    if (acc.appRole === 'dept_manager')
+      return `จัดการเช็คอิน รายชื่อพนักงาน และรายงานแผนก ${acc.departmentScope}`;
     return 'QR Display Kiosk · สำหรับเปิดหน้าจอสแกน QR';
+  };
+
+  const formatAccountDisplayName = (acc: UserAccount) => {
+    if (acc.appRole === 'super_admin') {
+      return 'Super Admin (ผู้ดูแลระบบกลาง)';
+    }
+    if (acc.appRole === 'dept_manager') {
+      return acc.name.startsWith('หัวหน้าแผนก ')
+        ? acc.name.replace('หัวหน้าแผนก ', 'แผนก ')
+        : acc.name;
+    }
+    return acc.name;
   };
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-900 flex flex-col justify-center items-center p-4 md:p-8">
       <div className="w-full max-w-5xl bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden grid grid-cols-1 lg:grid-cols-12">
-        {/* Left Column: Account & Role Selector */}
+        {/* Left Column: Department & Account Selector */}
         <div className="lg:col-span-7 p-6 md:p-8 bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col justify-between">
           <div>
-            <div className="flex items-center space-x-3 mb-2">
-              <div className="w-9 h-9 bg-blue-600 text-white rounded-xl flex items-center justify-center font-bold text-lg">
-                M
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 bg-blue-600 text-white rounded-xl flex items-center justify-center font-bold text-lg">
+                  M
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight">
+                    Meeting Time Check-in
+                  </h1>
+                  <p className="text-xs text-slate-500">
+                    เลือกแผนกเพื่อเข้าใช้งานระบบ ({departments.join(' · ')})
+                  </p>
+                </div>
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-                  Meeting Time Check-in
-                </h1>
-                <p className="text-xs text-slate-500">
-                  ระบบเข้าสู่ระบบสำหรับผู้ดูแลระบบและหัวหน้าแผนก (IE · EE · ME · MES · MER)
-                </p>
-              </div>
+
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-slate-200/80 text-slate-700 text-[11px] font-semibold rounded-lg whitespace-nowrap">
+                <Shield className="w-3.5 h-3.5 text-blue-600" />
+                <span>เพิ่ม/ลบแผนกโดย Super Admin</span>
+              </span>
             </div>
 
             {/* Filter Tabs */}
-            <div className="mt-5 mb-4 flex flex-wrap gap-1.5 bg-slate-200/70 p-1 rounded-xl">
+            <div className="mt-4 mb-4 flex flex-wrap gap-1.5 bg-slate-200/70 p-1 rounded-xl">
               <button
                 type="button"
                 onClick={() => setRoleFilter('ALL')}
@@ -93,6 +130,17 @@ export function Login() {
               </button>
               <button
                 type="button"
+                onClick={() => setRoleFilter('dept_manager')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                  roleFilter === 'dept_manager'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                แผนก ({departments.join(', ')})
+              </button>
+              <button
+                type="button"
                 onClick={() => setRoleFilter('super_admin')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                   roleFilter === 'super_admin'
@@ -101,17 +149,6 @@ export function Login() {
                 }`}
               >
                 Super Admin
-              </button>
-              <button
-                type="button"
-                onClick={() => setRoleFilter('dept_manager')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
-                  roleFilter === 'dept_manager'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                หัวหน้าแผนก (IE-MER)
               </button>
               <button
                 type="button"
@@ -130,6 +167,7 @@ export function Login() {
             <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
               {filteredAccounts.map((acc) => {
                 const isSelected = selectedAccount?.id === acc.id;
+                const displayName = formatAccountDisplayName(acc);
                 return (
                   <button
                     key={acc.id}
@@ -162,13 +200,13 @@ export function Login() {
                         )}
                       </div>
                       <div className="truncate">
-                        <div className="font-bold text-sm truncate">{acc.name}</div>
+                        <div className="font-bold text-sm truncate">{displayName}</div>
                         <div
                           className={`text-xs truncate mt-0.5 ${
                             isSelected ? 'text-blue-100' : 'text-slate-500'
                           }`}
                         >
-                          {getRoleLabel(acc.appRole)}
+                          {getRoleLabel(acc)}
                         </div>
                       </div>
                     </div>
@@ -180,7 +218,7 @@ export function Login() {
                           : 'bg-slate-100 text-slate-700'
                       }`}
                     >
-                      {acc.departmentScope === 'ALL' ? 'ทุกแผนก' : `แผนก ${acc.departmentScope}`}
+                      {acc.departmentScope === 'ALL' ? 'ทุกแผนก' : acc.departmentScope}
                     </div>
                   </button>
                 );
@@ -203,17 +241,17 @@ export function Login() {
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
                 <div className="text-xs font-semibold text-blue-600">
-                  บัญชีที่เลือกเข้าใช้งาน
+                  แผนก / บัญชีที่เลือกเข้าใช้งาน
                 </div>
                 <h2 className="text-xl font-bold text-slate-900 mt-1">
-                  {selectedAccount.name}
+                  {formatAccountDisplayName(selectedAccount)}
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
                   ขอบเขตการเข้าถึง:{' '}
                   <span className="font-semibold text-slate-700">
                     {selectedAccount.departmentScope === 'ALL'
-                      ? 'ทุกแผนก (IE, EE, ME, MES, MER)'
-                      : `เฉพาะแผนก ${selectedAccount.departmentScope}`}
+                      ? `ทุกแผนก (${departments.join(', ')})`
+                      : `แผนก ${selectedAccount.departmentScope}`}
                   </span>
                 </p>
               </div>
@@ -316,7 +354,9 @@ export function Login() {
             {showHint && selectedAccount && (
               <div className="mt-2.5 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-600">รหัสปัจจุบันของ <strong>{selectedAccount.name}</strong>:</span>
+                  <span className="text-slate-600">
+                    รหัสปัจจุบันของ <strong>{formatAccountDisplayName(selectedAccount)}</strong>:
+                  </span>
                   <button
                     type="button"
                     onClick={() => {
@@ -329,7 +369,7 @@ export function Login() {
                   </button>
                 </div>
                 <p className="text-slate-400 text-[11px]">
-                  *เมื่อเข้าสู่ระบบด้วย Super Admin แล้ว สามารถไปที่เมนู &ldquo;ตั้งค่า Role / สิทธิ์&rdquo; เพื่อเปลี่ยนรหัสผ่านหรือเพิ่มบัญชีใหม่ได้ทันที
+                  *เมื่อเข้าสู่ระบบด้วย Super Admin แล้ว สามารถไปที่เมนู &ldquo;ตั้งค่า Role / สิทธิ์&rdquo; เพื่อเปลี่ยนรหัสผ่านหรือเพิ่มแผนกใหม่ได้ทันที
                 </p>
               </div>
             )}

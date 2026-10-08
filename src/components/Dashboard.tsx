@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { CheckIn, Employee, Department, DEPARTMENTS } from '../types';
+import { CheckIn, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import * as XLSX from 'xlsx';
-import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX } from 'lucide-react';
+import QRCode from 'react-qr-code';
+import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, QrCode, Maximize2, Minimize2, Clock, Building2, X } from 'lucide-react';
 import { Leaderboard } from './Leaderboard';
 
 export function Dashboard() {
-  const { profile } = useAuth();
+  const { profile, departments } = useAuth();
   const scopedDept =
     profile?.departmentScope && profile.departmentScope !== 'ALL'
       ? profile.departmentScope
@@ -18,12 +19,85 @@ export function Dashboard() {
 
   const [loading, setLoading] = useState(true);
   const [todayCheckIns, setTodayCheckIns] = useState<CheckIn[]>([]);
+  const [monthCheckIns, setMonthCheckIns] = useState<CheckIn[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedDept, setSelectedDept] = useState<'ALL' | Department>(scopedDept || 'ALL');
 
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [defaultTimeRange, setDefaultTimeRange] = useState('07:30-07:45');
+  const [deptTimeRanges, setDeptTimeRanges] = useState<Partial<Record<Department, string>>>({});
+  const [qrDept, setQrDept] = useState<Department>(
+    scopedDept || ((localStorage.getItem('selected_checkin_dept') as Department) || departments[0] || 'IE')
+  );
+  const [qrUrl, setQrUrl] = useState('');
+  const [isQrExpanded, setIsQrExpanded] = useState(false);
+
   useEffect(() => {
     setSelectedDept(scopedDept || 'ALL');
+    if (scopedDept) {
+      setQrDept(scopedDept);
+    }
   }, [scopedDept]);
+
+  useEffect(() => {
+    if (selectedDept !== 'ALL') {
+      setQrDept(selectedDept);
+    }
+  }, [selectedDept]);
+
+  useEffect(() => {
+    if (!isQrExpanded) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsQrExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isQrExpanded]);
+
+  const activeQrDept: Department = scopedDept || qrDept || departments[0] || 'IE';
+  const activeQrTimeRange = deptTimeRanges[activeQrDept] || defaultTimeRange;
+
+  useEffect(() => {
+    const unsubSettings = onSnapshot(doc(db, 'settings', 'checkin'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.targetTimeRange) {
+          setDefaultTimeRange(data.targetTimeRange);
+        }
+        if (data.departmentTimeRanges) {
+          setDeptTimeRanges(data.departmentTimeRanges);
+        }
+      }
+    });
+    return () => unsubSettings();
+  }, []);
+
+  useEffect(() => {
+    const buildQrUrl = () => {
+      const url = new URL(window.location.href);
+      if (url.hostname.includes('ais-dev-')) {
+        url.hostname = url.hostname.replace('ais-dev-', 'ais-pre-');
+      }
+      url.searchParams.set('mode', 'scan');
+      url.searchParams.set('dept', activeQrDept);
+      url.searchParams.set('t', Date.now().toString());
+      return url.toString();
+    };
+
+    setQrUrl(buildQrUrl());
+
+    const timer = setInterval(() => {
+      const now = new Date();
+      setCurrentTime(now);
+      if (now.getSeconds() % 10 === 0) {
+        setQrUrl(buildQrUrl());
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [activeQrDept]);
   
   useEffect(() => {
     // Fetch active employees
@@ -35,7 +109,8 @@ export function Dashboard() {
       setEmployees(empData);
     }, console.warn);
 
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const now = new Date();
+    const todayStr = format(now, 'yyyy-MM-dd');
     const checkinsQ = query(collection(db, 'checkins'), where('dateStr', '==', todayStr));
     
     const unsubscribe = onSnapshot(checkinsQ, (snapshot) => {
@@ -48,19 +123,40 @@ export function Dashboard() {
       setLoading(false);
     });
 
+    const mStart = format(startOfMonth(now), 'yyyy-MM-dd');
+    const mEnd = format(endOfMonth(now), 'yyyy-MM-dd');
+    const monthQ = query(
+      collection(db, 'checkins'),
+      where('dateStr', '>=', mStart),
+      where('dateStr', '<=', mEnd)
+    );
+    const unsubMonth = onSnapshot(monthQ, (snapshot) => {
+      const mData: CheckIn[] = [];
+      snapshot.forEach((doc) => mData.push(doc.data() as CheckIn));
+      setMonthCheckIns(mData);
+    }, console.warn);
+
     return () => {
       unsubEmp();
       unsubscribe();
+      unsubMonth();
     };
   }, []);
 
+  const monthlyPointsMap: Record<string, number> = {};
+  monthCheckIns.forEach((c) => {
+    monthlyPointsMap[c.userId] = (monthlyPointsMap[c.userId] || 0) + (c.earnedPoints || 0);
+  });
+
   const handleExport = async () => {
     try {
+      const currentMonthPrefix = format(new Date(), 'yyyy-MM');
       const checkinsSnap = await getDocs(collection(db, 'checkins'));
       const empDeptMap = new Map(employees.map(e => [e.id, e.department || 'IE']));
       const allCheckins: any[] = [];
       checkinsSnap.forEach((doc) => {
         const data = doc.data() as CheckIn;
+        if (!data.dateStr || !data.dateStr.startsWith(currentMonthPrefix)) return;
         const dept = data.department || empDeptMap.get(data.userId) || 'IE';
         if (selectedDept !== 'ALL' && dept !== selectedDept) return;
         allCheckins.push({
@@ -70,6 +166,7 @@ export function Dashboard() {
           Time: format(new Date(data.timestamp), 'HH:mm:ss'),
           ArrivalStatus: data.status,
           Points: data.earnedPoints || 0,
+          MonthlyAccumulatedPoints: monthlyPointsMap[data.userId] || 0,
           MeetingStatus: data.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : data.meetingStatus === 'skip' ? 'ไม่เข้าร่วมประชุม' : 'N/A'
         });
       });
@@ -87,14 +184,14 @@ export function Dashboard() {
     return <div className="p-8 text-center text-slate-500 animate-pulse font-bold">Loading Dashboard...</div>;
   }
 
-  const empDeptMap = new Map(employees.map(e => [e.id, e.department || 'IE']));
+  const empDeptMap = new Map(employees.map(e => [e.id, (e.department || 'IE').trim().toUpperCase()]));
   const filteredEmployees = selectedDept === 'ALL'
     ? employees
-    : employees.filter(e => (e.department || 'IE') === selectedDept);
+    : employees.filter(e => (e.department || 'IE').trim().toUpperCase() === selectedDept.trim().toUpperCase());
 
   const filteredCheckIns = selectedDept === 'ALL'
     ? todayCheckIns
-    : todayCheckIns.filter(c => (c.department || empDeptMap.get(c.userId) || 'IE') === selectedDept);
+    : todayCheckIns.filter(c => (c.department || empDeptMap.get(c.userId) || 'IE').trim().toUpperCase() === selectedDept.trim().toUpperCase());
 
   const meetingJoinedCount = filteredCheckIns.filter(c => c.meetingStatus === 'join').length;
   const meetingSkippedCount = filteredCheckIns.filter(c => c.meetingStatus === 'skip').length;
@@ -108,6 +205,21 @@ export function Dashboard() {
 
   const checkedInIds = new Set(filteredCheckIns.map(c => c.userId));
   const missingEmployees = filteredEmployees.filter(e => !checkedInIds.has(e.id));
+
+  const qrDeptEmployees = employees.filter(
+    e => (e.department || 'IE').trim().toUpperCase() === activeQrDept.trim().toUpperCase()
+  );
+  const qrDeptCheckIns = todayCheckIns.filter(
+    c => (c.department || empDeptMap.get(c.userId) || 'IE').trim().toUpperCase() === activeQrDept.trim().toUpperCase()
+  );
+  const qrDeptCheckedInIds = new Set(qrDeptCheckIns.map(c => c.userId));
+  const qrDeptMissingCount = qrDeptEmployees.filter(e => !qrDeptCheckedInIds.has(e.id)).length;
+
+  const handleSelectQrDept = (dept: Department) => {
+    if (scopedDept) return;
+    setQrDept(dept);
+    localStorage.setItem('selected_checkin_dept', dept);
+  };
 
   return (
     <div className="space-y-6">
@@ -127,20 +239,32 @@ export function Dashboard() {
                 ทุกแผนก
               </button>
             )}
-            {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => (
+            {(scopedDept ? [scopedDept] : departments).map(dept => (
               <button
                 key={dept}
-                onClick={() => setSelectedDept(dept)}
+                onClick={() => {
+                  setSelectedDept(dept);
+                  setQrDept(dept);
+                  localStorage.setItem('selected_checkin_dept', dept);
+                }}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
                   selectedDept === dept ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                {scopedDept ? `เฉพาะแผนก ${dept}` : dept}
+                {scopedDept ? `แผนก ${dept}` : dept}
               </button>
             ))}
           </div>
         </div>
-        <div className="flex space-x-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setIsQrExpanded(true)}
+            className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-sm transition-colors"
+          >
+            <Maximize2 className="w-4 h-4 mr-2 text-blue-400" />
+            ขยาย QR Code ({activeQrDept})
+          </button>
           <button
             onClick={handleExport}
             className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-sm transition-colors"
@@ -183,7 +307,67 @@ export function Dashboard() {
       </div>
 
       <div className="grid grid-cols-12 gap-6">
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
+        {/* Department QR Code Card on Dashboard */}
+        <div className="col-span-12 md:col-span-6 xl:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <QrCode className="w-5 h-5 text-blue-600" />
+                <h3 className="font-bold text-slate-800 text-base">QR Code เช็คอิน ({activeQrDept})</h3>
+              </div>
+              <span className="text-xs font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-700">
+                รอสแกน {qrDeptMissingCount} คน
+              </span>
+            </div>
+
+            {!scopedDept && departments.length > 1 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {departments.map((dept) => (
+                  <button
+                    key={dept}
+                    type="button"
+                    onClick={() => handleSelectQrDept(dept)}
+                    className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${
+                      activeQrDept === dept
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {dept}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col items-center my-auto py-2">
+            <div
+              onClick={() => setIsQrExpanded(true)}
+              title="คลิกเพื่อขยาย QR Code ให้ใหญ่"
+              className="w-40 h-40 bg-white rounded-2xl border-2 border-slate-200 hover:border-blue-500 p-3 shadow-sm flex items-center justify-center relative cursor-pointer group transition-all"
+            >
+              {qrUrl && <QRCode value={qrUrl} size={136} className="w-full h-full text-slate-900" />}
+              <div className="absolute top-2 right-2 bg-slate-900/80 group-hover:bg-blue-600 text-white p-1.5 rounded-lg shadow transition-colors">
+                <Maximize2 className="w-3.5 h-3.5" />
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 mt-2 flex items-center gap-1 font-medium">
+              <Clock className="w-3.5 h-3.5 text-blue-500" />
+              <span>เวลาเข้าประชุม ({activeQrDept}): <strong className="text-slate-700">{activeQrTimeRange} น.</strong></span>
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsQrExpanded(true)}
+            className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 transition-colors"
+          >
+            <Maximize2 className="w-4 h-4 text-blue-400" />
+            <span>ขยาย QR Code ให้ใหญ่</span>
+          </button>
+        </div>
+
+        <div className="col-span-12 md:col-span-6 xl:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
           <h3 className="font-bold text-slate-800 text-lg mb-4">สถิติการประชุมเช้า ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -208,7 +392,7 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
+        <div className="col-span-12 md:col-span-6 xl:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-800 text-lg">พนักงานที่ยังไม่เช็คอิน</h3>
             <span className="bg-rose-100 text-rose-800 text-xs font-bold px-2 py-1 rounded-md">
@@ -237,10 +421,97 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 h-96">
-          <Leaderboard checkIns={filteredCheckIns} />
+        <div className="col-span-12 md:col-span-6 xl:col-span-3 h-96">
+          <Leaderboard checkIns={filteredCheckIns} monthlyPointsMap={monthlyPointsMap} />
         </div>
       </div>
+
+      {/* Expanded QR Code Modal on Dashboard */}
+      {isQrExpanded && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setIsQrExpanded(false)}
+        >
+          <div
+            className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-2xl w-full overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-slate-900 px-6 py-5 text-white border-b-4 border-blue-500 flex items-center justify-between">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-bold bg-blue-600 text-white mb-1">
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>แผนก {activeQrDept}</span>
+                </div>
+                <h3 className="text-xl font-bold tracking-tight">สแกน QR Code เช็คอินเข้าประชุมเช้า</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  เวลาเข้าประชุม ({activeQrDept}): <strong className="text-white">{activeQrTimeRange} น.</strong> • เช็คอินแล้ว <strong className="text-emerald-400">{qrDeptCheckIns.length} คน</strong> • รอเช็คอิน <strong className="text-amber-400">{qrDeptMissingCount} คน</strong>
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-right hidden sm:block">
+                  <div className="text-3xl font-bold tabular-nums tracking-tight">
+                    {format(currentTime, 'HH:mm')}
+                    <span className="text-blue-400 text-xl">:{format(currentTime, 'ss')}</span>
+                  </div>
+                  <div className="text-xs text-slate-400 font-semibold">{format(currentTime, 'EEE, MMM d')}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsQrExpanded(false)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                  title="ปิดหน้าต่างขยาย (ESC)"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            {!scopedDept && departments.length > 1 && (
+              <div className="bg-slate-100 px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-center gap-1.5">
+                <span className="text-xs font-bold text-slate-500 mr-1">เลือกแผนกสำหรับสแกน:</span>
+                {departments.map((dept) => (
+                  <button
+                    key={dept}
+                    type="button"
+                    onClick={() => handleSelectQrDept(dept)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      activeQrDept === dept
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {dept}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="p-6 sm:p-8 bg-slate-50 flex flex-col items-center">
+              <div className="w-[min(76vw,420px)] h-[min(76vw,420px)] bg-white rounded-3xl p-6 border-4 border-blue-500 shadow-xl flex items-center justify-center">
+                {qrUrl && <QRCode value={qrUrl} size={380} className="w-full h-full text-slate-900" />}
+              </div>
+
+              <div className="mt-5 text-center">
+                <p className="text-base font-bold text-slate-800">
+                  นำกล้องโทรศัพท์สแกน QR Code เพื่อเช็คอินแผนก <span className="text-blue-600">{activeQrDept}</span>
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  ระบบรีเฟรชรหัสความปลอดภัยอัตโนมัติทุก 10 วินาที
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsQrExpanded(false)}
+                className="mt-6 inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-sm transition-colors"
+              >
+                <Minimize2 className="w-4 h-4 text-blue-400" />
+                <span>ย่อขนาด QR Code</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

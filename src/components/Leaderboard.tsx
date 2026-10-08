@@ -5,16 +5,20 @@ import { format } from 'date-fns';
 
 interface LeaderboardProps {
   checkIns?: CheckIn[];
+  monthlyPointsMap?: Record<string, number>;
 }
 
-export function Leaderboard({ checkIns = [] }: LeaderboardProps) {
+export function Leaderboard({ checkIns = [], monthlyPointsMap = {} }: LeaderboardProps) {
   const sorted = [...checkIns].sort((a, b) => a.timestamp - b.timestamp);
 
   return (
     <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col h-full overflow-hidden">
-      <h3 className="font-bold text-slate-800 text-lg mb-4 flex items-center">
-        <Trophy className="w-5 h-5 text-yellow-500 mr-2" /> พนักงานที่เช็คอินแล้ว
-      </h3>
+      <div className="mb-4">
+        <h3 className="font-bold text-slate-800 text-lg flex items-center">
+          <Trophy className="w-5 h-5 text-yellow-500 mr-2" /> พนักงานที่เช็คอินแล้ว
+        </h3>
+        <p className="text-xs text-slate-500 mt-0.5">คะแนนสะสมนับเฉพาะรายเดือนปัจจุบัน</p>
+      </div>
       <div className="flex-1 overflow-y-auto pr-2 space-y-3">
         {sorted.length === 0 ? (
           <div className="p-8 text-center text-slate-500 text-sm">
@@ -27,6 +31,8 @@ export function Leaderboard({ checkIns = [] }: LeaderboardProps) {
             if (index === 0) badgeClass = "bg-yellow-400 text-yellow-900";
             else if (index === 1) badgeClass = "bg-slate-300 text-slate-800";
             else if (index === 2) badgeClass = "bg-orange-300 text-orange-900";
+
+            const monthTotal = monthlyPointsMap[checkIn.userId] ?? (checkIn.earnedPoints || 0);
 
             return (
               <div key={checkIn.id} className={`flex items-center justify-between p-3 rounded-xl border ${index < 3 ? 'bg-slate-50 border-slate-100' : 'bg-white border-slate-100 opacity-80'}`}>
@@ -44,6 +50,7 @@ export function Leaderboard({ checkIns = [] }: LeaderboardProps) {
                     <p className="text-[10px] text-slate-500 uppercase tracking-wide">
                       {checkIn.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : 'ไม่เข้าร่วม'}
                       {checkIn.earnedPoints ? ` • +${checkIn.earnedPoints} คะแนน` : ''}
+                      {` • สะสมเดือนนี้ ${monthTotal} คะแนน`}
                     </p>
                   </div>
                 </div>
