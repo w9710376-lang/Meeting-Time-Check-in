@@ -6,9 +6,10 @@
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Layout } from './components/Layout';
 import { CheckIn } from './components/CheckIn';
+import { Login } from './components/Login';
 
 function AppContent() {
-  const { loading } = useAuth();
+  const { profile, loading } = useAuth();
   
   const isScanMode = new URLSearchParams(window.location.search).get('mode') === 'scan';
 
@@ -26,6 +27,10 @@ function AppContent() {
         <CheckIn />
       </div>
     );
+  }
+
+  if (!profile) {
+    return <Login />;
   }
 
   return <Layout />;

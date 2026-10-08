@@ -1,18 +1,37 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, updateDoc, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Employee } from '../types';
+import { Employee, Department, DEPARTMENTS } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import { EMPLOYEE_LIST } from '../data/employees';
-import { Users, UserPlus, Trash2, Power, Search, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Users, UserPlus, Trash2, Power, Search, Building2 } from 'lucide-react';
 
 export function EmployeeManager() {
+  const { profile } = useAuth();
+  const scopedDept =
+    profile?.departmentScope && profile.departmentScope !== 'ALL'
+      ? profile.departmentScope
+      : null;
+
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterDept, setFilterDept] = useState<'ALL' | Department>(scopedDept || 'ALL');
   
   // Add new employee state
   const [newName, setNewName] = useState('');
+  const [newDept, setNewDept] = useState<Department>(scopedDept || 'IE');
   const [isAdding, setIsAdding] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (scopedDept) {
+      setFilterDept(scopedDept);
+      setNewDept(scopedDept);
+    } else {
+      setFilterDept('ALL');
+    }
+  }, [scopedDept]);
 
   useEffect(() => {
     const q = query(collection(db, 'employees'), orderBy('createdAt', 'desc'));
@@ -29,6 +48,7 @@ export function EmployeeManager() {
               id: emp.id,
               name: emp.name,
               role: emp.role as 'manager' | 'employee',
+              department: 'IE',
               isActive: true,
               createdAt: Date.now()
             };
@@ -63,6 +83,7 @@ export function EmployeeManager() {
         id,
         name: newName.trim(),
         role: 'employee',
+        department: newDept,
         isActive: true,
         createdAt: Date.now()
       };
@@ -72,6 +93,16 @@ export function EmployeeManager() {
       console.error("Error adding employee:", error);
     } finally {
       setIsAdding(false);
+    }
+  };
+
+  const handleDepartmentChange = async (emp: Employee, dept: Department) => {
+    try {
+      await updateDoc(doc(db, 'employees', emp.id), {
+        department: dept
+      });
+    } catch (error) {
+      console.error("Error updating department:", error);
     }
   };
 
@@ -86,17 +117,20 @@ export function EmployeeManager() {
   };
 
   const deleteEmployee = async (id: string) => {
-    if (!window.confirm("คุณต้องการลบรายชื่อพนักงานคนนี้ใช่หรือไม่?")) return;
     try {
       await deleteDoc(doc(db, 'employees', id));
+      setConfirmDeleteId(null);
     } catch (error) {
       console.error("Error deleting employee:", error);
     }
   };
 
-  const filteredEmployees = employees.filter(emp => 
-    emp.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredEmployees = employees.filter(emp => {
+    const empDept = emp.department || 'IE';
+    const matchesDept = filterDept === 'ALL' || empDept === filterDept;
+    const matchesSearch = emp.name.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesDept && matchesSearch;
+  });
 
   if (loading) {
     return <div className="p-8 text-center text-slate-500 font-bold animate-pulse">กำลังโหลดข้อมูลพนักงาน...</div>;
@@ -106,13 +140,27 @@ export function EmployeeManager() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">จัดการรายชื่อพนักงาน</h1>
-          <p className="text-sm text-slate-500">เพิ่ม ลบ หรือระงับการเช็คอินของพนักงาน</p>
+          <h1 className="text-xl font-bold text-slate-900">จัดการรายชื่อพนักงานแยกตามแผนก</h1>
+          <p className="text-sm text-slate-500">เพิ่ม ลบ หรือย้ายสังกัดแผนก (IE, EE, ME, MES, MER) ของพนักงาน</p>
         </div>
       </div>
 
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-        <form onSubmit={handleAddEmployee} className="flex gap-3 mb-6">
+        <form onSubmit={handleAddEmployee} className="flex flex-col sm:flex-row gap-3 mb-6">
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+            <Building2 className="w-4 h-4 text-blue-600" />
+            <span className="text-xs font-bold text-slate-500">แผนก:</span>
+            <select
+              value={newDept}
+              onChange={(e) => setNewDept(e.target.value as Department)}
+              className="bg-transparent font-bold text-slate-800 text-sm outline-none cursor-pointer"
+              disabled={isAdding || Boolean(scopedDept)}
+            >
+              {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => (
+                <option key={dept} value={dept}>{dept}</option>
+              ))}
+            </select>
+          </div>
           <input
             type="text"
             value={newName}
@@ -124,11 +172,45 @@ export function EmployeeManager() {
           <button
             type="submit"
             disabled={!newName.trim() || isAdding}
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-xl transition-colors flex items-center shadow-sm"
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-xl transition-colors flex items-center justify-center shadow-sm"
           >
-            {isAdding ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <><UserPlus className="w-5 h-5 mr-2" /> เพิ่มรายชื่อ</>}
+            {isAdding ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <><UserPlus className="w-5 h-5 mr-2" /> เพิ่มเข้าแผนก {newDept}</>}
           </button>
         </form>
+
+        {/* Department Filter Pills */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {!scopedDept && (
+            <button
+              type="button"
+              onClick={() => setFilterDept('ALL')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                filterDept === 'ALL'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              ทุกแผนก ({employees.length})
+            </button>
+          )}
+          {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => {
+            const count = employees.filter(e => (e.department || 'IE') === dept).length;
+            return (
+              <button
+                key={dept}
+                type="button"
+                onClick={() => setFilterDept(dept)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                  filterDept === dept
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {dept} ({count})
+              </button>
+            );
+          })}
+        </div>
 
         <div className="relative mb-6">
           <Search className="w-5 h-5 absolute left-4 top-3 text-slate-400" />
@@ -147,6 +229,7 @@ export function EmployeeManager() {
               <tr className="border-b border-slate-200 text-sm font-bold text-slate-500">
                 <th className="py-3 px-4 w-16 text-center">No.</th>
                 <th className="py-3 px-4">ชื่อ - นามสกุล</th>
+                <th className="py-3 px-4 text-center">แผนก</th>
                 <th className="py-3 px-4 text-center">สถานะ</th>
                 <th className="py-3 px-4 text-right">จัดการ</th>
               </tr>
@@ -161,6 +244,17 @@ export function EmployeeManager() {
                     <div className="font-bold text-slate-800">{emp.name}</div>
                   </td>
                   <td className="py-3 px-4 text-center">
+                    <select
+                      value={emp.department || 'IE'}
+                      onChange={(e) => handleDepartmentChange(emp, e.target.value as Department)}
+                      className="px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 outline-none cursor-pointer hover:bg-blue-100 transition-colors"
+                    >
+                      {DEPARTMENTS.map(dept => (
+                        <option key={dept} value={dept}>{dept}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="py-3 px-4 text-center">
                     <button
                       onClick={() => toggleStatus(emp)}
                       className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-colors ${emp.isActive ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
@@ -171,22 +265,39 @@ export function EmployeeManager() {
                     </button>
                   </td>
                   <td className="py-3 px-4 text-right">
-                    <button
-                      onClick={() => deleteEmployee(emp.id)}
-                      className="p-2 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors inline-flex"
-                      title="ลบพนักงาน"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
+                    {confirmDeleteId === emp.id ? (
+                      <div className="inline-flex items-center space-x-1">
+                        <button
+                          onClick={() => deleteEmployee(emp.id)}
+                          className="px-2.5 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 transition-colors"
+                        >
+                          ยืนยันลบ
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2.5 py-1 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 transition-colors"
+                        >
+                          ยกเลิก
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDeleteId(emp.id)}
+                        className="p-2 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors inline-flex"
+                        title="ลบพนักงาน"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
               
               {filteredEmployees.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="py-8 text-center text-slate-500">
+                  <td colSpan={5} className="py-8 text-center text-slate-500">
                     <Users className="w-12 h-12 mx-auto text-slate-300 mb-2" />
-                    <p className="mb-4">ไม่พบรายชื่อพนักงาน</p>
+                    <p className="mb-4">ไม่พบรายชื่อพนักงานในหมวดที่เลือก</p>
                   </td>
                 </tr>
               )}

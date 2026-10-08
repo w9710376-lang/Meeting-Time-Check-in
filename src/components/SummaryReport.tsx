@@ -1,21 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { CheckIn, Employee } from '../types';
+import { CheckIn, Employee, Department, DEPARTMENTS } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths } from 'date-fns';
 import { th } from 'date-fns/locale';
 import { Calendar, Download, BarChart2, CheckCircle2, Clock, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 
 type Period = 'weekly' | 'monthly';
 
 export function SummaryReport() {
+  const { profile } = useAuth();
+  const scopedDept =
+    profile?.departmentScope && profile.departmentScope !== 'ALL'
+      ? profile.departmentScope
+      : null;
+
   const [period, setPeriod] = useState<Period>('weekly');
   const [referenceDate, setReferenceDate] = useState<Date>(new Date());
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
+  const [selectedDept, setSelectedDept] = useState<'ALL' | Department>(scopedDept || 'ALL');
+
+  useEffect(() => {
+    setSelectedDept(scopedDept || 'ALL');
+  }, [scopedDept]);
 
   useEffect(() => {
     const empQ = query(collection(db, 'employees'), where('isActive', '==', true));
@@ -81,7 +93,11 @@ export function SummaryReport() {
   };
 
   const getReportData = () => {
-    const report = employees.map(emp => {
+    const filteredEmps = selectedDept === 'ALL'
+      ? employees
+      : employees.filter(e => (e.department || 'IE') === selectedDept);
+
+    const report = filteredEmps.map(emp => {
       const empCheckIns = checkIns.filter(c => c.userId === emp.id);
       const onTime = empCheckIns.filter(c => c.status === 'on-time').length;
       const late = empCheckIns.filter(c => c.status === 'late').length;
@@ -91,6 +107,7 @@ export function SummaryReport() {
       return {
         id: emp.id,
         name: emp.name,
+        department: emp.department || 'IE',
         totalPoints: emp.totalPoints || 0,
         total: empCheckIns.length,
         onTime,
@@ -124,6 +141,7 @@ export function SummaryReport() {
       const exportData = reportData.map((data, index) => ({
         'No.': index + 1,
         'ชื่อ - นามสกุล': data.name,
+        'แผนก': data.department,
         'คะแนนสะสม': data.totalPoints,
         'จำนวนวันเช็คอิน': data.total,
         'ตรงเวลา (วัน)': data.onTime,
@@ -135,10 +153,9 @@ export function SummaryReport() {
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Summary");
-      XLSX.writeFile(wb, `TimeSync_Summary_${period}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+      XLSX.writeFile(wb, `TimeSync_Summary_${selectedDept}_${period}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
     } catch (error) {
       console.error("Error exporting to Excel:", error);
-      alert("Failed to export data.");
     }
   };
 
@@ -151,7 +168,30 @@ export function SummaryReport() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-900">สรุปรายสัปดาห์และรายเดือน</h1>
-          <p className="text-sm text-slate-500">ตรวจสอบสถิติการเข้างานและการเข้าร่วมประชุมของพนักงาน</p>
+          <p className="text-sm text-slate-500">ตรวจสอบสถิติการเข้างานและการเข้าร่วมประชุมของพนักงานแยกตามแผนก</p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {!scopedDept && (
+              <button
+                onClick={() => setSelectedDept('ALL')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
+                  selectedDept === 'ALL' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                ทุกแผนก
+              </button>
+            )}
+            {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => (
+              <button
+                key={dept}
+                onClick={() => setSelectedDept(dept)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
+                  selectedDept === dept ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {scopedDept ? `เฉพาะแผนก ${dept}` : dept}
+              </button>
+            ))}
+          </div>
         </div>
         
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
@@ -189,7 +229,7 @@ export function SummaryReport() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-1 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
               <h3 className="font-bold text-slate-800 text-lg mb-4 flex items-center">
-                <CalendarDays className="w-5 h-5 mr-2 text-blue-500" /> ภาพรวม {period === 'weekly' ? 'รายสัปดาห์' : 'รายเดือน'}
+                <CalendarDays className="w-5 h-5 mr-2 text-blue-500" /> ภาพรวม {period === 'weekly' ? 'รายสัปดาห์' : 'รายเดือน'} ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})
               </h3>
               <p className="text-sm text-slate-500 mb-6">{periodLabel}</p>
               
@@ -212,7 +252,7 @@ export function SummaryReport() {
 
             <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
               <h3 className="font-bold text-slate-800 text-lg mb-4 flex items-center">
-                <BarChart2 className="w-5 h-5 mr-2 text-blue-500" /> สัดส่วนการเข้างาน
+                <BarChart2 className="w-5 h-5 mr-2 text-blue-500" /> สัดส่วนการเข้างาน ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})
               </h3>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
@@ -231,7 +271,7 @@ export function SummaryReport() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="p-6 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <h3 className="font-bold text-slate-800 text-lg flex items-center">
-                <Calendar className="w-5 h-5 mr-2 text-blue-500" /> รายงานสรุปรายบุคคล
+                <Calendar className="w-5 h-5 mr-2 text-blue-500" /> รายงานสรุปรายบุคคล ({selectedDept === 'ALL' ? 'ทุกแผนก' : `แผนก ${selectedDept}`})
               </h3>
               <button
                 onClick={handleExport}
@@ -248,6 +288,7 @@ export function SummaryReport() {
                   <tr className="bg-slate-50 border-b border-slate-200 text-sm font-bold text-slate-600 whitespace-nowrap">
                     <th className="py-4 px-4 w-16 text-center">No.</th>
                     <th className="py-4 px-4">ชื่อ - นามสกุล</th>
+                    <th className="py-4 px-4 text-center">แผนก</th>
                     <th className="py-4 px-4 text-center text-purple-600">คะแนนสะสม 🏆</th>
                     <th className="py-4 px-4 text-center">มา (วัน)</th>
                     <th className="py-4 px-4 text-center text-emerald-600">ตรงเวลา</th>
@@ -264,6 +305,11 @@ export function SummaryReport() {
                           {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}
                         </td>
                         <td className="py-3 px-4 font-bold text-slate-800">{data.name}</td>
+                        <td className="py-3 px-4 text-center">
+                          <span className="inline-block px-2.5 py-0.5 rounded-md text-xs font-bold bg-blue-50 text-blue-700">
+                            {data.department}
+                          </span>
+                        </td>
                         <td className="py-3 px-4 text-center font-bold text-purple-600">{data.totalPoints}</td>
                         <td className="py-3 px-4 text-center font-semibold text-slate-700">{data.total}</td>
                         <td className="py-3 px-4 text-center font-semibold text-emerald-600">{data.onTime > 0 ? data.onTime : '-'}</td>
@@ -274,8 +320,8 @@ export function SummaryReport() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-slate-500">
-                        ไม่มีข้อมูลพนักงาน
+                      <td colSpan={9} className="py-8 text-center text-slate-500">
+                        ไม่มีข้อมูลพนักงานในแผนกที่เลือก
                       </td>
                     </tr>
                   )}

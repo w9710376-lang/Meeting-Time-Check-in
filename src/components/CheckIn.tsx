@@ -1,18 +1,44 @@
 import React, { useState, useEffect } from 'react';
 import { doc, setDoc, collection, query, onSnapshot, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { CheckIn as CheckInType, Employee } from '../types';
+import { CheckIn as CheckInType, Employee, Department, DEPARTMENTS } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import QRCode from 'react-qr-code';
-import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock } from 'lucide-react';
+import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2 } from 'lucide-react';
 
 type Step = 'scan' | 'select-name' | 'meeting' | 'processing' | 'success' | 'error';
 
 export function CheckIn({ onComplete }: { onComplete?: () => void }) {
+  const { profile } = useAuth();
   const [currentTime, setCurrentTime] = useState(new Date());
-  const isScanMode = new URLSearchParams(window.location.search).get('mode') === 'scan';
-  const urlScanTime = new URLSearchParams(window.location.search).get('t');
-  
+  const searchParams = new URLSearchParams(window.location.search);
+  const isScanMode = searchParams.get('mode') === 'scan';
+  const urlScanTime = searchParams.get('t');
+  const urlDept = searchParams.get('dept') as Department | null;
+
+  const scopedDept: Department | null =
+    !isScanMode && profile?.departmentScope && profile.departmentScope !== 'ALL'
+      ? profile.departmentScope
+      : null;
+  const canEditTime = !isScanMode && (profile?.canEditTime ?? true);
+
+  const initialDept: Department = (urlDept && DEPARTMENTS.includes(urlDept))
+    ? urlDept
+    : scopedDept
+    ? scopedDept
+    : ((localStorage.getItem('selected_checkin_dept') as Department) || 'IE');
+
+  const [selectedDept, setSelectedDept] = useState<Department>(
+    DEPARTMENTS.includes(initialDept) ? initialDept : 'IE'
+  );
+
+  useEffect(() => {
+    if (scopedDept) {
+      setSelectedDept(scopedDept);
+    }
+  }, [scopedDept]);
+
   // Real-time employee list
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [checkedInIds, setCheckedInIds] = useState<Set<string>>(new Set());
@@ -30,11 +56,27 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [message, setMessage] = useState(isQrExpired ? 'QR Code หมดอายุ กรุณาสแกนใหม่จากหน้าจอหลัก' : '');
   
-  const [targetTimeRange, setTargetTimeRange] = useState('07:30-07:45');
+  const [defaultTimeRange, setDefaultTimeRange] = useState('07:30-07:45');
+  const [deptTimeRanges, setDeptTimeRanges] = useState<Partial<Record<Department, string>>>({});
   const [isEditingTime, setIsEditingTime] = useState(false);
+
+  const targetTimeRange = deptTimeRanges[selectedDept] || defaultTimeRange;
   const [editTimeValue, setEditTimeValue] = useState(targetTimeRange);
   
   const [appUrl, setAppUrl] = useState('');
+
+  // Keep editTimeValue synced when switching departments
+  useEffect(() => {
+    setEditTimeValue(deptTimeRanges[selectedDept] || defaultTimeRange);
+  }, [selectedDept, deptTimeRanges, defaultTimeRange]);
+
+  const handleDeptChange = (dept: Department) => {
+    setSelectedDept(dept);
+    setIsEditingTime(false);
+    if (!isScanMode) {
+      localStorage.setItem('selected_checkin_dept', dept);
+    }
+  };
 
   // Calculate if QR code should be visible based on current time and targetTimeRange
   const isCheckInOpen = () => {
@@ -66,24 +108,34 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.targetTimeRange) {
-          setTargetTimeRange(data.targetTimeRange);
-          setEditTimeValue(data.targetTimeRange);
+          setDefaultTimeRange(data.targetTimeRange);
+        }
+        if (data.departmentTimeRanges) {
+          setDeptTimeRanges(data.departmentTimeRanges);
         }
       }
     });
 
-    const url = new URL(window.location.href);
-    
-    // Auto-convert development URL to shared preview URL for mobile access
-    if (url.hostname.includes('ais-dev-')) {
-      url.hostname = url.hostname.replace('ais-dev-', 'ais-pre-');
-    }
-    
-    url.searchParams.set('mode', 'scan');
-    
-    if (!isScanMode) {
+    return () => {
+      unsubscribeConfig();
+    };
+  }, []);
+
+  // Build and refresh QR Code URL with selectedDept
+  useEffect(() => {
+    const buildQrUrl = () => {
+      const url = new URL(window.location.href);
+      if (url.hostname.includes('ais-dev-')) {
+        url.hostname = url.hostname.replace('ais-dev-', 'ais-pre-');
+      }
+      url.searchParams.set('mode', 'scan');
+      url.searchParams.set('dept', selectedDept);
       url.searchParams.set('t', Date.now().toString());
-      setAppUrl(url.toString());
+      return url.toString();
+    };
+
+    if (!isScanMode) {
+      setAppUrl(buildQrUrl());
     } else {
       setAppUrl(window.location.href);
     }
@@ -94,16 +146,14 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       
       // Dynamic QR: Update QR code token every 10 seconds for central screen
       if (!isScanMode && now.getSeconds() % 10 === 0) {
-        url.searchParams.set('t', Date.now().toString());
-        setAppUrl(url.toString());
+        setAppUrl(buildQrUrl());
       }
     }, 1000);
     
     return () => {
       clearInterval(timer);
-      unsubscribeConfig();
     };
-  }, []);
+  }, [selectedDept, isScanMode]);
 
   useEffect(() => {
     // Only fetch active employees
@@ -117,12 +167,17 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       
       if (isScanMode && rememberedEmpId && !selectedEmployee) {
         const found = emps.find(e => e.id === rememberedEmpId);
-        if (found) {
+        // Only auto-select remembered employee if they belong to the scanned department (if urlDept was specified)
+        const empDept = found?.department || 'IE';
+        if (found && (!urlDept || empDept === urlDept)) {
           setSelectedEmployee(found);
+          setSelectedDept(empDept);
         } else {
-          // If employee not found (e.g. deleted/inactive), fallback to select name
+          // If employee not found or belongs to another department, let user select from the scanned department
           setStep('select-name');
-          localStorage.removeItem('remembered_employee_id');
+          if (!found) {
+            localStorage.removeItem('remembered_employee_id');
+          }
         }
       }
     }, console.warn);
@@ -162,6 +217,9 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     }
     
     setSelectedEmployee(employee);
+    if (employee.department) {
+      setSelectedDept(employee.department);
+    }
     setStep('meeting');
   };
 
@@ -175,11 +233,14 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       const minutes = now.getMinutes();
       const timeVal = hours + minutes / 60;
       
+      const empDept: Department = selectedEmployee?.department || selectedDept;
+      const activeTimeRange = deptTimeRanges[empDept] || defaultTimeRange;
+
       // Parse the targetTimeRange to get start and end times for point calculation
       let startHours = 7, startMinutes = 30; // Default 07:30
       let endHours = 7, endMinutes = 45; // Default 07:45
       
-      const timeParts = targetTimeRange.split('-');
+      const timeParts = activeTimeRange.split('-');
       if (timeParts.length === 2) {
         const startParts = timeParts[0].trim().split(':');
         const endParts = timeParts[1].trim().split(':');
@@ -195,7 +256,6 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       }
       
       const limitTimeVal = endHours + endMinutes / 60;
-      const startTimeVal = startHours + startMinutes / 60;
       
       const isOnTime = timeVal <= limitTimeVal;
       const checkInStatus = isOnTime ? 'on-time' : 'late';
@@ -233,6 +293,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         id: checkInId,
         userId: selectedEmployee.id,
         userName: selectedEmployee.name,
+        department: empDept,
         timestamp: now.getTime(),
         location: null,
         status: checkInStatus,
@@ -260,9 +321,9 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       setStep('success');
       
       if (earnedPoints > 0) {
-        setMessage(`เช็คอินสำเร็จ! คุณเข้าร่วมประชุมเช้า และได้รับ ${earnedPoints} คะแนน 🎉`);
+        setMessage(`เช็คอินสำเร็จ! แผนก ${empDept} เข้าร่วมประชุมเช้า และได้รับ ${earnedPoints} คะแนน 🎉`);
       } else {
-        setMessage(`เช็คอินสำเร็จ! คุณ${status === 'join' ? 'เข้าร่วม' : 'ไม่เข้าร่วม'}ประชุมเช้า`);
+        setMessage(`เช็คอินสำเร็จ! คุณ${status === 'join' ? 'เข้าร่วม' : 'ไม่เข้าร่วม'}ประชุมเช้า (แผนก ${empDept})`);
       }
     } catch (error: any) {
       console.warn(error);
@@ -282,7 +343,13 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
   const saveTimeRange = async () => {
     try {
-      await setDoc(doc(db, 'settings', 'checkin'), { targetTimeRange: editTimeValue }, { merge: true });
+      const updatedRanges = {
+        ...deptTimeRanges,
+        [selectedDept]: editTimeValue.trim()
+      };
+      await setDoc(doc(db, 'settings', 'checkin'), {
+        departmentTimeRanges: updatedRanges
+      }, { merge: true });
       setIsEditingTime(false);
     } catch (error) {
       console.warn("Failed to save time range", error);
@@ -300,27 +367,52 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     }
   };
 
-  const filteredEmployees = employees
+  // Filter active employees by selected department and search query
+  const deptEmployees = employees.filter(emp => (emp.department || 'IE') === selectedDept);
+  const filteredEmployees = deptEmployees
     .filter(emp => !checkedInIds.has(emp.id))
     .filter(emp => emp.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
   return (
     <div className="max-w-md mx-auto bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-200">
-      <div className="bg-slate-900 px-6 py-8 text-center text-white border-b-4 border-blue-500 relative">
+      <div className="bg-slate-900 px-6 py-7 text-center text-white border-b-4 border-blue-500 relative">
         <h2 className="text-2xl font-bold tracking-tight">Meeting Time Check-in</h2>
-        <div className="mt-6 flex justify-center items-center space-x-2 text-5xl font-bold text-white tabular-nums tracking-tighter">
+
+        {/* Department Selector Tabs */}
+        <div className="mt-4 flex justify-center">
+          <div className="inline-flex bg-slate-800 p-1 rounded-xl border border-slate-700 gap-1">
+            {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => (
+              <button
+                key={dept}
+                type="button"
+                onClick={() => handleDeptChange(dept)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                  selectedDept === dept
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-700/60'
+                }`}
+              >
+                { scopedDept ? `แผนก ${dept}` : dept }
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 flex justify-center items-center space-x-2 text-5xl font-bold text-white tabular-nums tracking-tighter">
           <span>{format(currentTime, 'HH:mm')}</span><span className="text-blue-500 opacity-80 text-3xl">:{format(currentTime, 'ss')}</span>
         </div>
-        <p className="mt-3 text-slate-400 text-sm font-semibold uppercase tracking-wider">{format(currentTime, 'EEEE, MMM do')}</p>
+        <p className="mt-2 text-slate-400 text-sm font-semibold uppercase tracking-wider">{format(currentTime, 'EEEE, MMM do')}</p>
         
-        <div className="mt-5 flex justify-center items-center">
+        <div className="mt-4 flex justify-center items-center">
           {isEditingTime ? (
             <div className="flex items-center space-x-2 bg-slate-800 p-1.5 rounded-lg border border-slate-700">
+              <span className="text-xs font-bold text-blue-400 pl-2">{selectedDept}:</span>
               <input 
                 type="text" 
                 value={editTimeValue}
                 onChange={e => setEditTimeValue(e.target.value)}
                 className="bg-transparent text-white text-sm text-center outline-none w-28"
+                placeholder="07:30-07:45"
                 autoFocus
               />
               <button 
@@ -333,11 +425,12 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
           ) : (
             <div className="flex items-center space-x-2 text-slate-300 text-sm bg-slate-800/50 px-4 py-2 rounded-full border border-slate-700/50 group">
               <Clock className="w-4 h-4 text-blue-400" />
-              <span>เวลาเข้างาน/ประชุม: <strong className="text-white">{targetTimeRange} น.</strong></span>
-              {!isScanMode && (
+              <span>เวลาเข้าประชุม ({selectedDept}): <strong className="text-white">{targetTimeRange} น.</strong></span>
+              {canEditTime && (
                 <button 
                   onClick={() => { setEditTimeValue(targetTimeRange); setIsEditingTime(true); }} 
-                  className="ml-2 text-slate-500 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+                  className="ml-2 text-slate-400 hover:text-white transition-colors"
+                  title={`แก้ไขเวลาเช็คอินของแผนก ${selectedDept}`}
                 >
                   <Edit2 className="w-4 h-4" />
                 </button>
@@ -358,17 +451,21 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
           <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
             {isCheckInOpen() ? (
               <>
+                <div className="mb-3 inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
+                  <Building2 className="w-3.5 h-3.5 mr-1.5" />
+                  QR Code สำหรับแผนก {selectedDept} (รอเช็คอิน {filteredEmployees.length} คน)
+                </div>
                 <div className="w-64 h-64 bg-white rounded-2xl mb-6 relative overflow-hidden border-2 border-slate-200 shadow-sm flex items-center justify-center p-5">
                   {appUrl && <QRCode value={appUrl} size={220} className="w-full h-full text-slate-800" />}
                 </div>
-                <h3 className="text-lg font-bold text-slate-900">สแกน QR Code</h3>
-                <p className="text-slate-500 text-sm mt-1 text-center mb-6">นำกล้องจ่อที่ QR Code หน้าห้องประชุมเพื่อดำเนินการต่อ</p>
+                <h3 className="text-lg font-bold text-slate-900">สแกน QR Code แผนก {selectedDept}</h3>
+                <p className="text-slate-500 text-sm mt-1 text-center mb-6">นำกล้องจ่อที่ QR Code หน้าห้องประชุมเพื่อเช็คอินเข้าแผนก {selectedDept}</p>
                 
                 <button
                   onClick={handleScanSuccess}
                   className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition-colors"
                 >
-                  ค้นหารายชื่อเพื่อเช็คอิน
+                  ค้นหารายชื่อแผนก {selectedDept}
                 </button>
               </>
             ) : (
@@ -376,8 +473,8 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                 <div className="w-20 h-20 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-4">
                   <Clock className="w-10 h-10" />
                 </div>
-                <h3 className="text-xl font-bold text-slate-900">หมดเวลาเช็คอินแล้ว</h3>
-                <p className="text-slate-500 mt-2 max-w-xs">เลยกำหนดเวลาเข้างาน/ประชุมตามที่ตั้งค่าไว้ หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ</p>
+                <h3 className="text-xl font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {selectedDept})</h3>
+                <p className="text-slate-500 mt-2 max-w-xs">เลยกำหนดเวลาเข้าประชุมของแผนก {selectedDept} ({targetTimeRange} น.) หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ</p>
               </div>
             )}
           </div>
@@ -385,11 +482,14 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
         {step === 'select-name' && (
           <div className="flex flex-col items-center animate-in fade-in slide-in-from-right-4 duration-300 w-full">
-            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4">
+            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-3">
               <Users className="w-6 h-6 text-blue-600" />
             </div>
+            <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 mb-2">
+              แผนก {selectedDept}
+            </div>
             <h3 className="text-lg font-bold text-slate-900">ค้นหารายชื่อของคุณ</h3>
-            <p className="text-slate-500 text-sm mt-1 text-center mb-4">โปรดพิมพ์ชื่อหรือนามสกุลของคุณ</p>
+            <p className="text-slate-500 text-sm mt-1 text-center mb-4">แสดงเฉพาะรายชื่อพนักงานในแผนก {selectedDept}</p>
             
             <div className="w-full relative mb-4">
               <Search className="w-5 h-5 absolute left-3 top-2.5 text-slate-400" />
@@ -397,7 +497,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="พิมพ์ชื่อ นามสกุล..."
+                placeholder={`พิมพ์ชื่อพนักงานแผนก ${selectedDept}...`}
                 className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
               />
             </div>
@@ -410,14 +510,15 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                     onClick={() => handleNameSelect(emp)}
                     className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
                   >
-                    <div>
-                      <div className="font-bold text-slate-900">{emp.name}</div>
-                    </div>
+                    <div className="font-bold text-slate-900">{emp.name}</div>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-md bg-slate-100 text-slate-600">
+                      {emp.department || 'IE'}
+                    </span>
                   </button>
                 ))
               ) : (
                 <div className="text-center p-4 text-slate-500 text-sm border border-dashed border-slate-300 rounded-xl">
-                  ไม่พบรายชื่อ
+                  ไม่พบรายชื่อในแผนก {selectedDept} ที่ยังไม่ได้เช็คอิน
                 </div>
               )}
             </div>
@@ -427,6 +528,9 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         {step === 'meeting' && selectedEmployee && (
           <div className="flex flex-col items-center animate-in fade-in slide-in-from-right-4 duration-300 w-full">
             <div className="text-center mb-6">
+              <span className="inline-block px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 mb-2">
+                แผนก {selectedEmployee.department || selectedDept}
+              </span>
               <p className="text-sm font-medium text-slate-500">คุณกำลังเช็คอินในชื่อ</p>
               <h3 className="text-xl font-bold text-slate-900 mt-1">{selectedEmployee.name}</h3>
             </div>

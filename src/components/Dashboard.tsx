@@ -1,17 +1,29 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, where, getDocs, onSnapshot, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { CheckIn, Employee } from '../types';
+import { CheckIn, Employee, Department, DEPARTMENTS } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import * as XLSX from 'xlsx';
-import { Download, Users, Clock, AlertCircle, CheckCircle2, CalendarCheck, CalendarX } from 'lucide-react';
+import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX } from 'lucide-react';
 import { Leaderboard } from './Leaderboard';
 
 export function Dashboard() {
+  const { profile } = useAuth();
+  const scopedDept =
+    profile?.departmentScope && profile.departmentScope !== 'ALL'
+      ? profile.departmentScope
+      : null;
+
   const [loading, setLoading] = useState(true);
   const [todayCheckIns, setTodayCheckIns] = useState<CheckIn[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [selectedDept, setSelectedDept] = useState<'ALL' | Department>(scopedDept || 'ALL');
+
+  useEffect(() => {
+    setSelectedDept(scopedDept || 'ALL');
+  }, [scopedDept]);
   
   useEffect(() => {
     // Fetch active employees
@@ -45,27 +57,29 @@ export function Dashboard() {
   const handleExport = async () => {
     try {
       const checkinsSnap = await getDocs(collection(db, 'checkins'));
+      const empDeptMap = new Map(employees.map(e => [e.id, e.department || 'IE']));
       const allCheckins: any[] = [];
       checkinsSnap.forEach((doc) => {
         const data = doc.data() as CheckIn;
+        const dept = data.department || empDeptMap.get(data.userId) || 'IE';
+        if (selectedDept !== 'ALL' && dept !== selectedDept) return;
         allCheckins.push({
           Name: data.userName,
+          Department: dept,
           Date: data.dateStr,
           Time: format(new Date(data.timestamp), 'HH:mm:ss'),
           ArrivalStatus: data.status,
-          MeetingStatus: data.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : data.meetingStatus === 'skip' ? 'ไม่เข้าร่วมประชุม' : 'N/A',
-          Latitude: data.location?.lat || 'N/A',
-          Longitude: data.location?.lng || 'N/A'
+          Points: data.earnedPoints || 0,
+          MeetingStatus: data.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : data.meetingStatus === 'skip' ? 'ไม่เข้าร่วมประชุม' : 'N/A'
         });
       });
 
       const ws = XLSX.utils.json_to_sheet(allCheckins);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "CheckIns");
-      XLSX.writeFile(wb, `CheckIn_Report_${format(new Date(), 'yyyy-MM')}.xlsx`);
+      XLSX.writeFile(wb, `CheckIn_Report_${selectedDept}_${format(new Date(), 'yyyy-MM')}.xlsx`);
     } catch (error) {
       console.error("Error exporting to Excel:", error);
-      alert("Failed to export data.");
     }
   };
 
@@ -73,9 +87,18 @@ export function Dashboard() {
     return <div className="p-8 text-center text-slate-500 animate-pulse font-bold">Loading Dashboard...</div>;
   }
 
-  const meetingJoinedCount = todayCheckIns.filter(c => c.meetingStatus === 'join').length;
-  const meetingSkippedCount = todayCheckIns.filter(c => c.meetingStatus === 'skip').length;
-  const missingCount = employees.length - todayCheckIns.length;
+  const empDeptMap = new Map(employees.map(e => [e.id, e.department || 'IE']));
+  const filteredEmployees = selectedDept === 'ALL'
+    ? employees
+    : employees.filter(e => (e.department || 'IE') === selectedDept);
+
+  const filteredCheckIns = selectedDept === 'ALL'
+    ? todayCheckIns
+    : todayCheckIns.filter(c => (c.department || empDeptMap.get(c.userId) || 'IE') === selectedDept);
+
+  const meetingJoinedCount = filteredCheckIns.filter(c => c.meetingStatus === 'join').length;
+  const meetingSkippedCount = filteredCheckIns.filter(c => c.meetingStatus === 'skip').length;
+  const missingCount = filteredEmployees.length - filteredCheckIns.length;
 
   const chartData = [
     { name: 'Joined Meeting', value: meetingJoinedCount, color: '#10B981' }, 
@@ -83,15 +106,40 @@ export function Dashboard() {
     { name: 'Pending Scan', value: Math.max(0, missingCount), color: '#94A3B8' } 
   ];
 
-  const checkedInIds = new Set(todayCheckIns.map(c => c.userId));
-  const missingEmployees = employees.filter(e => !checkedInIds.has(e.id));
+  const checkedInIds = new Set(filteredCheckIns.map(c => c.userId));
+  const missingEmployees = filteredEmployees.filter(e => !checkedInIds.has(e.id));
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h1 className="text-lg font-semibold text-slate-700">
-          Executive Dashboard: <span className="text-blue-600 font-bold">{format(new Date(), 'MMM dd, yyyy')}</span>
-        </h1>
+        <div>
+          <h1 className="text-lg font-semibold text-slate-700">
+            Executive Dashboard: <span className="text-blue-600 font-bold">{format(new Date(), 'MMM dd, yyyy')}</span>
+          </h1>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {!scopedDept && (
+              <button
+                onClick={() => setSelectedDept('ALL')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
+                  selectedDept === 'ALL' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                ทุกแผนก
+              </button>
+            )}
+            {(scopedDept ? [scopedDept] : DEPARTMENTS).map(dept => (
+              <button
+                key={dept}
+                onClick={() => setSelectedDept(dept)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
+                  selectedDept === dept ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {scopedDept ? `เฉพาะแผนก ${dept}` : dept}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="flex space-x-4">
           <button
             onClick={handleExport}
@@ -105,8 +153,8 @@ export function Dashboard() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-          <p className="text-sm text-slate-500 font-medium">รายชื่อพนักงานทั้งหมด</p>
-          <h2 className="text-3xl font-bold text-slate-900 mt-1">{employees.length}</h2>
+          <p className="text-sm text-slate-500 font-medium">รายชื่อพนักงาน ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})</p>
+          <h2 className="text-3xl font-bold text-slate-900 mt-1">{filteredEmployees.length}</h2>
           <div className="mt-2 flex items-center text-blue-600 text-xs font-bold">
             <Users className="w-3 h-3 mr-1" /> พนักงานที่เปิดใช้งาน
           </div>
@@ -136,7 +184,7 @@ export function Dashboard() {
 
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
-          <h3 className="font-bold text-slate-800 text-lg mb-4">สถิติการประชุมเช้า (Morning Meeting)</h3>
+          <h3 className="font-bold text-slate-800 text-lg mb-4">สถิติการประชุมเช้า ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -179,6 +227,9 @@ export function Dashboard() {
                 {missingEmployees.map(emp => (
                   <li key={emp.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="font-bold text-sm text-slate-800">{emp.name}</span>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-700">
+                      {emp.department || 'IE'}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -187,7 +238,7 @@ export function Dashboard() {
         </div>
 
         <div className="col-span-12 lg:col-span-4 h-96">
-          <Leaderboard checkIns={todayCheckIns} />
+          <Leaderboard checkIns={filteredCheckIns} />
         </div>
       </div>
     </div>

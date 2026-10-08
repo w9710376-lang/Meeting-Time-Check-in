@@ -35,9 +35,15 @@ export function Leaderboard({ checkIns = [] }: LeaderboardProps) {
                     {index + 1}
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-800">{checkIn.userName}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm font-bold text-slate-800">{checkIn.userName}</p>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">
+                        {checkIn.department || 'IE'}
+                      </span>
+                    </div>
                     <p className="text-[10px] text-slate-500 uppercase tracking-wide">
                       {checkIn.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : 'ไม่เข้าร่วม'}
+                      {checkIn.earnedPoints ? ` • +${checkIn.earnedPoints} คะแนน` : ''}
                     </p>
                   </div>
                 </div>
