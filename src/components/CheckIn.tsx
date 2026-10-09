@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { doc, setDoc, collection, query, onSnapshot, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { CheckIn as CheckInType, Employee, Department } from '../types';
@@ -7,8 +7,42 @@ import { format } from 'date-fns';
 import QRCode from 'react-qr-code';
 import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2, Plus, X, Maximize2, Minimize2, ShieldCheck, Lock, Smartphone } from 'lucide-react';
 import { getOrCreateDeviceId, getHardwareSignature, getDeviceModelLabel, getShortDeviceCode } from '../lib/deviceFingerprint';
+import {
+  getInitialCachedEmployees,
+  saveCachedEmployees,
+  getInitialCachedTodayCheckIns,
+  saveCachedTodayCheckIns,
+  getInitialCachedTimeRanges,
+  saveCachedTimeRanges,
+  fetchFastCheckinCache,
+} from '../lib/checkinFastCache';
 
 type Step = 'scan' | 'select-name' | 'meeting' | 'processing' | 'success' | 'error';
+
+function resolveScanEmployee(
+  emps: Employee[],
+  deviceId: string,
+  remId: string | null,
+  deptParam: string | null
+): Employee | null {
+  const cloudBoundEmp = emps.find(
+    (e) => e.boundDeviceId && e.boundDeviceId === deviceId
+  );
+  if (cloudBoundEmp) {
+    return cloudBoundEmp;
+  }
+  if (remId) {
+    const found = emps.find((e) => e.id === remId);
+    const isBoundToOtherPhone =
+      found?.boundDeviceId && found.boundDeviceId !== deviceId;
+    const empDept = (found?.department || 'IE').trim().toUpperCase();
+    const scannedDeptNorm = deptParam ? deptParam.trim().toUpperCase() : null;
+    if (found && !isBoundToOtherPhone && (!scannedDeptNorm || empDept === scannedDeptNorm)) {
+      return found;
+    }
+  }
+  return null;
+}
 
 export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   const { profile, departments, addDepartment, removeDepartment } = useAuth();
@@ -17,6 +51,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   const isScanMode = searchParams.get('mode') === 'scan';
   const urlScanTime = searchParams.get('t');
   const urlDept = searchParams.get('dept') as Department | null;
+  const urlTimeRange = searchParams.get('tr');
 
   const isSuperAdmin = !isScanMode && profile?.appRole === 'super_admin';
   const scopedDept: Department | null =
@@ -69,36 +104,75 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     }
   };
 
-  // Real-time employee list & today's check-ins
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [checkedInIds, setCheckedInIds] = useState<Set<string>>(new Set());
-  const [todayCheckInsList, setTodayCheckInsList] = useState<CheckInType[]>([]);
-
   // Persistent Device ID & Hardware Signature for Anti-Buddy-Punching
   const [currentDeviceId] = useState<string>(() => getOrCreateDeviceId());
   const [currentHardwareSig] = useState<string>(() => getHardwareSignature());
   const [currentDeviceLabel] = useState<string>(() => getDeviceModelLabel());
 
+  // Instant 0ms cache hydration for employees, today's check-ins, and time ranges
+  const todayDateStr = useMemo(() => format(new Date(), 'yyyy-MM-dd'), []);
+  const initialEmpCache = useMemo(() => getInitialCachedEmployees(), []);
+  const initialCheckInsCache = useMemo(
+    () => getInitialCachedTodayCheckIns(todayDateStr),
+    [todayDateStr]
+  );
+  const initialTimeCache = useMemo(() => getInitialCachedTimeRanges(), []);
+
+  // Real-time employee list & today's check-ins (hydrated immediately from cache)
+  const [employees, setEmployees] = useState<Employee[]>(() => initialEmpCache.employees);
+  const [isLoadingEmployees, setIsLoadingEmployees] = useState<boolean>(
+    () => !initialEmpCache.fromCache
+  );
+  const [checkedInIds, setCheckedInIds] = useState<Set<string>>(
+    () => initialCheckInsCache.checkedInIds
+  );
+  const [todayCheckInsList, setTodayCheckInsList] = useState<CheckInType[]>(
+    () => initialCheckInsCache.list
+  );
+
   // Try to load remembered employee for scan mode
   const rememberedEmpId = localStorage.getItem('remembered_employee_id');
 
-  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(() =>
+    isScanMode
+      ? resolveScanEmployee(initialEmpCache.employees, currentDeviceId, rememberedEmpId, urlDept)
+      : null
+  );
 
   // Employee permanently bound to this phone in Cloud Firestore (1:1 Device Binding)
-  const boundOwner = employees.find(
-    (e) => e.boundDeviceId && e.boundDeviceId === currentDeviceId
-  ) || null;
-  
+  const boundOwner = useMemo(
+    () =>
+      employees.find((e) => e.boundDeviceId && e.boundDeviceId === currentDeviceId) || null,
+    [employees, currentDeviceId]
+  );
+
   // Check if QR expired immediately on load
   const isQrExpired = isScanMode && (!urlScanTime || Date.now() - parseInt(urlScanTime, 10) > 30000);
-  const [step, setStep] = useState<Step>(isScanMode ? (isQrExpired ? 'error' : (rememberedEmpId ? 'meeting' : 'select-name')) : 'scan');
-  
+  const [step, setStep] = useState<Step>(() => {
+    if (!isScanMode) return 'scan';
+    if (isQrExpired) return 'error';
+    const initialMatched = resolveScanEmployee(
+      initialEmpCache.employees,
+      currentDeviceId,
+      rememberedEmpId,
+      urlDept
+    );
+    return initialMatched ? 'meeting' : 'select-name';
+  });
+
   const [meetingStatus, setMeetingStatus] = useState<'join' | 'skip' | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [message, setMessage] = useState(isQrExpired ? 'QR Code หมดอายุ กรุณาสแกนใหม่จากหน้าจอหลัก' : '');
-  
-  const [defaultTimeRange, setDefaultTimeRange] = useState('07:30-07:45');
-  const [deptTimeRanges, setDeptTimeRanges] = useState<Partial<Record<Department, string>>>({});
+
+  const [defaultTimeRange, setDefaultTimeRange] = useState<string>(
+    () => initialTimeCache.defaultTimeRange
+  );
+  const [deptTimeRanges, setDeptTimeRanges] = useState<Partial<Record<Department, string>>>(() => {
+    if (urlDept && urlTimeRange) {
+      return { ...initialTimeCache.deptTimeRanges, [urlDept]: urlTimeRange };
+    }
+    return initialTimeCache.deptTimeRanges;
+  });
   const [isEditingTime, setIsEditingTime] = useState(false);
 
   const targetTimeRange = deptTimeRanges[selectedDept] || defaultTimeRange;
@@ -167,21 +241,24 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     const unsubscribeConfig = onSnapshot(doc(db, 'settings', 'checkin'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
+        const nextDefault = data.targetTimeRange || '07:30-07:45';
+        const nextDepts = data.departmentTimeRanges || {};
         if (data.targetTimeRange) {
           setDefaultTimeRange(data.targetTimeRange);
         }
         if (data.departmentTimeRanges) {
           setDeptTimeRanges(data.departmentTimeRanges);
         }
+        saveCachedTimeRanges(nextDefault, nextDepts, !isScanMode);
       }
     });
 
     return () => {
       unsubscribeConfig();
     };
-  }, []);
+  }, [isScanMode]);
 
-  // Build and refresh QR Code URL with selectedDept
+  // Build and refresh QR Code URL with selectedDept and targetTimeRange
   useEffect(() => {
     const buildQrUrl = () => {
       const url = new URL(window.location.href);
@@ -190,6 +267,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       }
       url.searchParams.set('mode', 'scan');
       url.searchParams.set('dept', selectedDept);
+      url.searchParams.set('tr', targetTimeRange);
       url.searchParams.set('t', Date.now().toString());
       return url.toString();
     };
@@ -213,67 +291,115 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     return () => {
       clearInterval(timer);
     };
-  }, [selectedDept, isScanMode]);
+  }, [selectedDept, targetTimeRange, isScanMode]);
 
   useEffect(() => {
-    // Only fetch active employees
-    const q = query(collection(db, 'employees'), where('isActive', '==', true));
-    const unsubscribeEmp = onSnapshot(q, (snapshot) => {
-      const emps: Employee[] = [];
-      snapshot.forEach(doc => emps.push({ ...doc.data(), id: doc.id, isActive: doc.data().isActive ?? true } as Employee));
-      // Sort alphabetically once when data arrives, instead of every render tick
-      emps.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    let firestoreEmpsLoaded = false;
+    let firestoreCheckinsLoaded = false;
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+    const applyEmployeeList = (emps: Employee[], shouldPushServer: boolean) => {
       setEmployees(emps);
+      setIsLoadingEmployees(false);
+      saveCachedEmployees(emps, shouldPushServer);
 
       if (isScanMode) {
-        // Priority 1: Check if this device is already bound to an employee in Cloud Firestore
-        const cloudBoundEmp = emps.find(
-          (e) => e.boundDeviceId && e.boundDeviceId === currentDeviceId
-        );
-        if (cloudBoundEmp) {
-          localStorage.setItem('remembered_employee_id', cloudBoundEmp.id);
-          const empDept = (cloudBoundEmp.department || 'IE').trim().toUpperCase();
-          setSelectedEmployee(cloudBoundEmp);
+        const remId = localStorage.getItem('remembered_employee_id');
+        const matched = resolveScanEmployee(emps, currentDeviceId, remId, urlDept);
+        if (matched) {
+          localStorage.setItem('remembered_employee_id', matched.id);
+          const empDept = (matched.department || 'IE').trim().toUpperCase();
+          setSelectedEmployee(matched);
           setSelectedDept(empDept);
           setStep((prev) => (prev === 'error' || prev === 'success' ? prev : 'meeting'));
-          return;
-        }
-
-        // Priority 2: Fallback to remembered_employee_id ONLY if that employee isn't bound to a different phone
-        if (rememberedEmpId && !selectedEmployee) {
-          const found = emps.find((e) => e.id === rememberedEmpId);
+        } else if (remId) {
+          const found = emps.find((e) => e.id === remId);
           const isBoundToOtherPhone =
             found?.boundDeviceId && found.boundDeviceId !== currentDeviceId;
-          const empDept = (found?.department || 'IE').trim().toUpperCase();
-          const scannedDeptNorm = urlDept ? urlDept.trim().toUpperCase() : null;
-
-          if (found && !isBoundToOtherPhone && (!scannedDeptNorm || empDept === scannedDeptNorm)) {
-            setSelectedEmployee(found);
-            setSelectedDept(empDept);
-          } else {
-            setStep((prev) => (prev === 'error' || prev === 'success' ? prev : 'select-name'));
-            if (!found || isBoundToOtherPhone) {
-              localStorage.removeItem('remembered_employee_id');
-            }
+          setStep((prev) => (prev === 'error' || prev === 'success' ? prev : 'select-name'));
+          if (!found || isBoundToOtherPhone) {
+            localStorage.removeItem('remembered_employee_id');
           }
         }
       }
-    }, console.warn);
+    };
 
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    // Fast same-origin HTTP bootstrap (~15-30ms on mobile) before Firestore WebChannel finishes handshaking
+    fetchFastCheckinCache().then((fastData) => {
+      if (!fastData) return;
+      if (
+        !firestoreEmpsLoaded &&
+        Array.isArray(fastData.employees) &&
+        fastData.employees.length > 0
+      ) {
+        applyEmployeeList(fastData.employees, false);
+      }
+      if (
+        !firestoreCheckinsLoaded &&
+        fastData.todayDateStr === todayStr &&
+        Array.isArray(fastData.todayCheckIns)
+      ) {
+        const ids = new Set<string>();
+        fastData.todayCheckIns.forEach((c) => {
+          if (c && c.userId) ids.add(c.userId);
+        });
+        setCheckedInIds(ids);
+        setTodayCheckInsList(fastData.todayCheckIns);
+        saveCachedTodayCheckIns(todayStr, fastData.todayCheckIns, false);
+      }
+      if (fastData.defaultTimeRange) {
+        setDefaultTimeRange(fastData.defaultTimeRange);
+      }
+      if (fastData.deptTimeRanges && typeof fastData.deptTimeRanges === 'object') {
+        setDeptTimeRanges((prev) => ({ ...fastData.deptTimeRanges, ...prev }));
+      }
+    });
+
+    // Real-time Firestore listener for employees
+    const unsubscribeEmp = onSnapshot(
+      collection(db, 'employees'),
+      (snapshot) => {
+        const emps: Employee[] = [];
+        snapshot.forEach((docSnap) => {
+          const raw = docSnap.data();
+          const isActive = raw.isActive ?? true;
+          if (isActive !== false) {
+            emps.push({ ...raw, id: docSnap.id, isActive: true } as Employee);
+          }
+        });
+        if (emps.length > 0) {
+          firestoreEmpsLoaded = true;
+          emps.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+          applyEmployeeList(emps, !snapshot.metadata.fromCache);
+        } else {
+          setIsLoadingEmployees(false);
+        }
+      },
+      (err) => {
+        console.warn(err);
+        setIsLoadingEmployees(false);
+      }
+    );
+
     const checkinsQ = query(collection(db, 'checkins'), where('dateStr', '==', todayStr));
-    const unsubscribeCheckins = onSnapshot(checkinsQ, (snapshot) => {
-      const ids = new Set<string>();
-      const list: CheckInType[] = [];
-      snapshot.forEach((docSnap) => {
-        const d = docSnap.data() as CheckInType;
-        ids.add(d.userId);
-        list.push(d);
-      });
-      setCheckedInIds(ids);
-      setTodayCheckInsList(list);
-    }, console.warn);
-    
+    const unsubscribeCheckins = onSnapshot(
+      checkinsQ,
+      (snapshot) => {
+        firestoreCheckinsLoaded = true;
+        const ids = new Set<string>();
+        const list: CheckInType[] = [];
+        snapshot.forEach((docSnap) => {
+          const d = docSnap.data() as CheckInType;
+          ids.add(d.userId);
+          list.push(d);
+        });
+        setCheckedInIds(ids);
+        setTodayCheckInsList(list);
+        saveCachedTodayCheckIns(todayStr, list, !snapshot.metadata.fromCache);
+      },
+      console.warn
+    );
+
     return () => {
       unsubscribeEmp();
       unsubscribeCheckins();
@@ -317,7 +443,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
           targetEmp.name
         }" ได้ผูกกับมือถือเครื่องอื่นไว้แล้ว (${getShortDeviceCode(
           targetEmp.boundDeviceId
-        )}) ไม่สามารถใช้เครื่องนี้หรือโหมดไม่ระบุตัวตนสแกนแทนได้ (หากเจ้าตัวเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้งหัวหน้าแผนกเพื่อกดรีเซ็ตเครื่อง)`,
+        )}) ไม่สามารถใช้เครื่องนี้หรือโหมดไม่ระบุตัวตนสแกนแทนได้ (หากเจ้าตัวเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้ง Super Admin ผู้ดูแลระบบกลางเพื่อกดรีเซ็ตเครื่อง)`,
       };
     }
 
@@ -546,6 +672,23 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
       // Save check-in record
       setDoc(doc(db, 'checkins', checkInId), newCheckIn).catch(console.warn);
+
+      // Optimistically update local & fast server cache immediately
+      const updatedEmps = employees.map((e) =>
+        e.id === selectedEmployee.id ? ({ ...e, ...empUpdatePayload } as Employee) : e
+      );
+      setEmployees(updatedEmps);
+      saveCachedEmployees(updatedEmps, true);
+
+      const nextCheckInsList = [
+        ...todayCheckInsList.filter((c) => c.id !== checkInId),
+        newCheckIn,
+      ];
+      const nextCheckedInIds = new Set(checkedInIds);
+      nextCheckedInIds.add(selectedEmployee.id);
+      setTodayCheckInsList(nextCheckInsList);
+      setCheckedInIds(nextCheckedInIds);
+      saveCachedTodayCheckIns(format(now, 'yyyy-MM-dd'), nextCheckInsList, true);
       
       // Record successful checkin on this device for today
       if (isScanMode) {
@@ -596,16 +739,22 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     if (onComplete && !isScanMode) {
       onComplete();
     } else if (isScanMode) {
-      if (boundOwner) {
-        setSelectedEmployee(boundOwner);
-        setSelectedDept(boundOwner.department || selectedDept);
+      const matched = resolveScanEmployee(
+        employees,
+        currentDeviceId,
+        localStorage.getItem('remembered_employee_id'),
+        urlDept
+      );
+      if (matched) {
+        setSelectedEmployee(matched);
+        setSelectedDept(matched.department || selectedDept);
         setMeetingStatus(null);
         setStep('meeting');
       } else {
         setSelectedEmployee(null);
         setMeetingStatus(null);
         setSearchQuery('');
-        setStep(rememberedEmpId ? 'meeting' : 'select-name');
+        setStep('select-name');
       }
     } else {
       setSelectedEmployee(null);
@@ -615,13 +764,35 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     }
   };
 
-  // Filter active employees by selected department and search query
-  const deptEmployees = employees.filter(
-    emp => (emp.department || 'IE').trim().toUpperCase() === selectedDept.trim().toUpperCase()
-  );
-  const filteredEmployees = deptEmployees
-    .filter(emp => !checkedInIds.has(emp.id))
-    .filter(emp => emp.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Memoize filtered employees so the 1-second clock tick does not re-filter the list on mobile
+  const deptEmployees = useMemo(() => {
+    const targetNorm = selectedDept.trim().toUpperCase();
+    return employees.filter(
+      (emp) => (emp.department || 'IE').trim().toUpperCase() === targetNorm
+    );
+  }, [employees, selectedDept]);
+
+  const { deptCheckedInCount, deptPendingCount } = useMemo(() => {
+    let checkedIn = 0;
+    for (const emp of deptEmployees) {
+      if (checkedInIds.has(emp.id)) {
+        checkedIn++;
+      }
+    }
+    return {
+      deptCheckedInCount: checkedIn,
+      deptPendingCount: Math.max(0, deptEmployees.length - checkedIn),
+    };
+  }, [deptEmployees, checkedInIds]);
+
+  const filteredEmployees = useMemo(() => {
+    const qNorm = searchQuery.trim().toLowerCase();
+    return deptEmployees.filter(
+      (emp) =>
+        !checkedInIds.has(emp.id) &&
+        (!qNorm || emp.name.toLowerCase().includes(qNorm))
+    );
+  }, [deptEmployees, checkedInIds, searchQuery]);
 
   return (
     <div className="max-w-md mx-auto bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-200">
@@ -832,8 +1003,8 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
           </div>
         )}
 
-        {step === 'select-name' && (
-          <div className="flex flex-col items-center animate-in fade-in slide-in-from-right-4 duration-300 w-full">
+        {(step === 'select-name' || (step === 'meeting' && !selectedEmployee)) && (
+          <div className="flex flex-col items-center animate-in fade-in slide-in-from-right-4 duration-200 w-full">
             <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-3">
               <Users className="w-6 h-6 text-blue-600" />
             </div>
@@ -841,7 +1012,36 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
               แผนก {selectedDept}
             </div>
             <h3 className="text-lg font-bold text-slate-900">ค้นหารายชื่อของคุณ</h3>
-            <p className="text-slate-500 text-sm mt-1 text-center mb-4">แสดงเฉพาะรายชื่อพนักงานในแผนก {selectedDept}</p>
+            <p className="text-slate-500 text-sm mt-1 text-center mb-3">แสดงเฉพาะรายชื่อพนักงานในแผนก {selectedDept}</p>
+
+            {/* Summary counts: เช็คอินสำเร็จ & รอสแกน */}
+            <div className="grid grid-cols-2 gap-2.5 w-full mb-4">
+              <div className="flex items-center justify-between px-3 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl shadow-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                    <CheckCircle className="w-4 h-4" />
+                  </div>
+                  <span className="text-xs font-bold text-emerald-800 truncate">เช็คอินสำเร็จ</span>
+                </div>
+                <div className="text-right shrink-0 ml-1">
+                  <span className="text-base font-extrabold text-emerald-700 tabular-nums">{deptCheckedInCount}</span>
+                  <span className="text-[11px] font-semibold text-emerald-600 ml-1">คน</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl shadow-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <span className="text-xs font-bold text-amber-800 truncate">รอสแกน</span>
+                </div>
+                <div className="text-right shrink-0 ml-1">
+                  <span className="text-base font-extrabold text-amber-700 tabular-nums">{deptPendingCount}</span>
+                  <span className="text-[11px] font-semibold text-amber-600 ml-1">คน</span>
+                </div>
+              </div>
+            </div>
             
             <div className="w-full relative mb-4">
               <Search className="w-5 h-5 absolute left-3 top-2.5 text-slate-400" />
@@ -892,6 +1092,11 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                     </button>
                   );
                 })
+              ) : isLoadingEmployees ? (
+                <div className="flex flex-col items-center justify-center p-6 text-slate-500 text-sm border border-dashed border-slate-300 rounded-xl gap-2">
+                  <div className="w-6 h-6 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin"></div>
+                  <span>กำลังโหลดรายชื่อพนักงานแผนก {selectedDept}...</span>
+                </div>
               ) : (
                 <div className="text-center p-4 text-slate-500 text-sm border border-dashed border-slate-300 rounded-xl">
                   ไม่พบรายชื่อในแผนก {selectedDept} ที่ยังไม่ได้เช็คอิน
@@ -942,7 +1147,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                     <span>อุปกรณ์ผูกแบบ 1:1 กับชื่อ "{selectedEmployee.name}" แล้ว</span>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-1 tabular-nums">
-                    รหัสเครื่อง: {getShortDeviceCode(currentDeviceId)} · ไม่สามารถเปลี่ยนชื่อเพื่อสแกนแทนผู้อื่นได้ (หากเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้งหัวหน้าแผนกเพื่อรีเซ็ตเครื่อง)
+                    รหัสเครื่อง: {getShortDeviceCode(currentDeviceId)} · ไม่สามารถเปลี่ยนชื่อเพื่อสแกนแทนผู้อื่นได้ (หากเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้ง Super Admin ผู้ดูแลระบบกลางเพื่อรีเซ็ตเครื่อง)
                   </p>
                 </div>
               ) : (

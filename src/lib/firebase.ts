@@ -3,7 +3,9 @@ import {
   initializeFirestore,
   getFirestore,
   setLogLevel,
-   Firestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  Firestore,
 } from 'firebase/firestore';
 import config from '../../firebase-applet-config.json';
 
@@ -18,13 +20,27 @@ try {
   firestoreDb = initializeFirestore(
     app,
     {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
       experimentalAutoDetectLongPolling: true,
       ignoreUndefinedProperties: true,
     },
     config.firestoreDatabaseId
   );
 } catch {
-  firestoreDb = getFirestore(app, config.firestoreDatabaseId);
+  try {
+    firestoreDb = initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true,
+        ignoreUndefinedProperties: true,
+      },
+      config.firestoreDatabaseId
+    );
+  } catch {
+    firestoreDb = getFirestore(app, config.firestoreDatabaseId);
+  }
 }
 
 export const db = firestoreDb;

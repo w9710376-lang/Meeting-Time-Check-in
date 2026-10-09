@@ -1,11 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { LayoutDashboard, Fingerprint, Users, FileText, Shield, LogOut } from 'lucide-react';
 import { CheckIn } from './CheckIn';
-import { Dashboard } from './Dashboard';
-import { EmployeeManager } from './EmployeeManager';
-import { SummaryReport } from './SummaryReport';
-import { RoleManager } from './RoleManager';
+
+const Dashboard = React.lazy(() =>
+  import('./Dashboard').then((m) => ({ default: m.Dashboard }))
+);
+const EmployeeManager = React.lazy(() =>
+  import('./EmployeeManager').then((m) => ({ default: m.EmployeeManager }))
+);
+const SummaryReport = React.lazy(() =>
+  import('./SummaryReport').then((m) => ({ default: m.SummaryReport }))
+);
+const RoleManager = React.lazy(() =>
+  import('./RoleManager').then((m) => ({ default: m.RoleManager }))
+);
 
 type TabType = 'checkin' | 'dashboard' | 'employees' | 'summary' | 'roles';
 
@@ -159,17 +168,25 @@ export function Layout() {
           </div>
         </header>
         <div className="flex-1 overflow-auto p-8">
-          {activeTab === 'dashboard' ? (
-            <Dashboard />
-          ) : activeTab === 'employees' ? (
-            <EmployeeManager />
-          ) : activeTab === 'summary' ? (
-            <SummaryReport />
-          ) : activeTab === 'roles' ? (
-            <RoleManager />
-          ) : (
-            <CheckIn onComplete={() => setActiveTab(isKiosk ? 'checkin' : 'dashboard')} />
-          )}
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center py-20">
+                <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
+              </div>
+            }
+          >
+            {activeTab === 'dashboard' ? (
+              <Dashboard />
+            ) : activeTab === 'employees' ? (
+              <EmployeeManager />
+            ) : activeTab === 'summary' ? (
+              <SummaryReport />
+            ) : activeTab === 'roles' ? (
+              <RoleManager />
+            ) : (
+              <CheckIn onComplete={() => setActiveTab(isKiosk ? 'checkin' : 'dashboard')} />
+            )}
+          </Suspense>
         </div>
       </main>
     </div>

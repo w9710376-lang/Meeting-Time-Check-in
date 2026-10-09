@@ -27,6 +27,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { getShortDeviceCode } from '../lib/deviceFingerprint';
+import { saveCachedEmployees } from '../lib/checkinFastCache';
 
 interface ParsedUploadRow {
   rowIndex: number;
@@ -140,6 +141,7 @@ export function EmployeeManager() {
 
       empData.sort((a, b) => a.name.localeCompare(b.name, 'th'));
       setEmployees(empData);
+      saveCachedEmployees(empData);
       setLoading(false);
     }, (error) => {
       console.warn("Offline mode or error:", error);
@@ -558,6 +560,13 @@ export function EmployeeManager() {
   };
 
   const resetDeviceBinding = async (emp: Employee) => {
+    if (!isSuperAdmin) {
+      setImportFeedback({
+        type: 'error',
+        message: 'เฉพาะ Super Admin (ผู้ดูแลระบบกลาง) เท่านั้นที่สามารถรีเซ็ตเครื่องที่ผูกได้',
+      });
+      return;
+    }
     try {
       await updateDoc(doc(db, 'employees', emp.id), {
         boundDeviceId: null,
@@ -891,15 +900,17 @@ export function EmployeeManager() {
                             </p>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => resetDeviceBinding(emp)}
-                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
-                          title="ปลดล็อกเครื่องเดิม เพื่อให้พนักงานผูกกับโทรศัพท์เครื่องใหม่ได้"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>รีเซ็ตเครื่อง</span>
-                        </button>
+                        {isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => resetDeviceBinding(emp)}
+                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                            title="ปลดล็อกเครื่องเดิม เพื่อให้พนักงานผูกกับโทรศัพท์เครื่องใหม่ได้ (เฉพาะ Super Admin)"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>รีเซ็ตเครื่อง</span>
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400">

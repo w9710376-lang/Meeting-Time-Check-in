@@ -98,11 +98,26 @@ function accountToUser(acc: UserAccount): User {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfileState] = useState<User | null>(null);
   const [accounts, setAccounts] = useState<UserAccount[]>(DEFAULT_ACCOUNTS);
-  const [departments, setDepartments] = useState<Department[]>(DEFAULT_DEPARTMENTS);
+  const [departments, setDepartments] = useState<Department[]>(() => {
+    try {
+      const cached = localStorage.getItem('timesync_departments_cache_v1');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_DEPARTMENTS;
+  });
   const [deletedDepartments, setDeletedDepartments] = useState<DeletedDepartmentBackup[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const isScanMode = searchParams.get('mode') === 'scan';
+    const urlDept = searchParams.get('dept');
+
     // 1. Restore session from localStorage if exists
     const storedSession = localStorage.getItem('timesync_auth_session');
     if (storedSession) {
@@ -115,6 +130,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     setLoading(false);
+
+    // In mobile QR scan mode when department is already locked in URL,
+    // skip heavy admin account and department Firestore subscriptions to maximize mobile scan speed
+    if (isScanMode && urlDept) {
+      return;
+    }
 
     // 2. Subscribe to departments list in Firestore (settings/departments)
     const unsubDepts = onSnapshot(
@@ -129,6 +150,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
           if (Array.isArray(data.list) && data.list.length > 0) {
             setDepartments(data.list);
+            try {
+              localStorage.setItem('timesync_departments_cache_v1', JSON.stringify(data.list));
+            } catch {
+              // ignore
+            }
             return;
           }
         }
@@ -147,6 +173,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Using default departments list:', err.message);
       }
     );
+
+    if (isScanMode) {
+      return () => {
+        unsubDepts();
+      };
+    }
 
     // 3. Subscribe to accounts collection in Firestore
     const unsubAccounts = onSnapshot(

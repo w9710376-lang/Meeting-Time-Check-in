@@ -9,6 +9,12 @@ import * as XLSX from 'xlsx';
 import QRCode from 'react-qr-code';
 import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, Maximize2, Minimize2, Building2, X } from 'lucide-react';
 import { Leaderboard } from './Leaderboard';
+import {
+  getInitialCachedEmployees,
+  saveCachedEmployees,
+  saveCachedTodayCheckIns,
+  saveCachedTimeRanges,
+} from '../lib/checkinFastCache';
 
 export function Dashboard() {
   const { profile, departments } = useAuth();
@@ -20,7 +26,9 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [todayCheckIns, setTodayCheckIns] = useState<CheckIn[]>([]);
   const [monthCheckIns, setMonthCheckIns] = useState<CheckIn[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>(
+    () => getInitialCachedEmployees().employees
+  );
   const [selectedDept, setSelectedDept] = useState<'ALL' | Department>(scopedDept || 'ALL');
 
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -63,12 +71,15 @@ export function Dashboard() {
     const unsubSettings = onSnapshot(doc(db, 'settings', 'checkin'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
+        const nextDefault = data.targetTimeRange || '07:30-07:45';
+        const nextDepts = data.departmentTimeRanges || {};
         if (data.targetTimeRange) {
           setDefaultTimeRange(data.targetTimeRange);
         }
         if (data.departmentTimeRanges) {
           setDeptTimeRanges(data.departmentTimeRanges);
         }
+        saveCachedTimeRanges(nextDefault, nextDepts, true);
       }
     });
     return () => unsubSettings();
@@ -82,6 +93,7 @@ export function Dashboard() {
       }
       url.searchParams.set('mode', 'scan');
       url.searchParams.set('dept', activeQrDept);
+      url.searchParams.set('tr', activeQrTimeRange);
       url.searchParams.set('t', Date.now().toString());
       return url.toString();
     };
@@ -97,16 +109,24 @@ export function Dashboard() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [activeQrDept]);
+  }, [activeQrDept, activeQrTimeRange]);
   
   useEffect(() => {
     // Fetch active employees
-    const empQ = query(collection(db, 'employees'), where('isActive', '==', true));
-    const unsubEmp = onSnapshot(empQ, (snapshot) => {
+    const unsubEmp = onSnapshot(collection(db, 'employees'), (snapshot) => {
       const empData: Employee[] = [];
-      snapshot.forEach(doc => empData.push({ ...doc.data(), id: doc.id, isActive: doc.data().isActive ?? true } as Employee));
-      empData.sort((a, b) => a.name.localeCompare(b.name, 'th'));
-      setEmployees(empData);
+      snapshot.forEach((docSnap) => {
+        const raw = docSnap.data();
+        const isActive = raw.isActive ?? true;
+        if (isActive !== false) {
+          empData.push({ ...raw, id: docSnap.id, isActive: true } as Employee);
+        }
+      });
+      if (empData.length > 0) {
+        empData.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+        setEmployees(empData);
+        saveCachedEmployees(empData, !snapshot.metadata.fromCache);
+      }
     }, console.warn);
 
     const now = new Date();
@@ -117,6 +137,7 @@ export function Dashboard() {
       const checkinsData: CheckIn[] = [];
       snapshot.forEach((doc) => checkinsData.push(doc.data() as CheckIn));
       setTodayCheckIns(checkinsData);
+      saveCachedTodayCheckIns(todayStr, checkinsData, !snapshot.metadata.fromCache);
       setLoading(false);
     }, (error: any) => {
       console.warn("Offline mode: Error fetching dashboard data:", error.message);
