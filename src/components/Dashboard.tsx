@@ -4,10 +4,10 @@ import { db } from '../lib/firebase';
 import { CheckIn, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 import * as XLSX from 'xlsx';
 import QRCode from 'react-qr-code';
-import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, QrCode, Maximize2, Minimize2, Clock, Building2, X } from 'lucide-react';
+import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, Maximize2, Minimize2, Building2, X } from 'lucide-react';
 import { Leaderboard } from './Leaderboard';
 
 export function Dashboard() {
@@ -167,7 +167,12 @@ export function Dashboard() {
           ArrivalStatus: data.status,
           Points: data.earnedPoints || 0,
           MonthlyAccumulatedPoints: monthlyPointsMap[data.userId] || 0,
-          MeetingStatus: data.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : data.meetingStatus === 'skip' ? 'ไม่เข้าร่วมประชุม' : 'N/A'
+          MeetingStatus: data.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : data.meetingStatus === 'skip' ? 'ไม่เข้าร่วมประชุม' : 'N/A',
+          DeviceID: data.deviceId || '-',
+          DeviceModel: data.deviceLabel || '-',
+          SecurityVerification: data.suspiciousFlag
+            ? `ตรวจสอบ: ${data.suspiciousReason || 'ฮาร์ดแวร์สแกนซ้ำใกล้กัน'}`
+            : 'ปกติ (Verified 1:1)',
         });
       });
 
@@ -193,15 +198,37 @@ export function Dashboard() {
     ? todayCheckIns
     : todayCheckIns.filter(c => (c.department || empDeptMap.get(c.userId) || 'IE').trim().toUpperCase() === selectedDept.trim().toUpperCase());
 
+  const totalEmployeesCount = filteredEmployees.length;
   const meetingJoinedCount = filteredCheckIns.filter(c => c.meetingStatus === 'join').length;
   const meetingSkippedCount = filteredCheckIns.filter(c => c.meetingStatus === 'skip').length;
-  const missingCount = filteredEmployees.length - filteredCheckIns.length;
+  const onTimeCount = filteredCheckIns.filter(c => c.status === 'on-time').length;
+  const lateCount = filteredCheckIns.filter(c => c.status === 'late').length;
+  const missingCount = Math.max(0, totalEmployeesCount - filteredCheckIns.length);
 
-  const chartData = [
-    { name: 'Joined Meeting', value: meetingJoinedCount, color: '#10B981' }, 
-    { name: 'Skipped Meeting', value: meetingSkippedCount, color: '#E11D48' }, 
-    { name: 'Pending Scan', value: Math.max(0, missingCount), color: '#94A3B8' } 
-  ];
+  const denominator = Math.max(1, totalEmployeesCount || filteredCheckIns.length);
+  const joinPct = totalEmployeesCount > 0 || filteredCheckIns.length > 0
+    ? Math.round((meetingJoinedCount / denominator) * 100)
+    : 0;
+  const skipPct = totalEmployeesCount > 0 || filteredCheckIns.length > 0
+    ? Math.round((meetingSkippedCount / denominator) * 100)
+    : 0;
+  const missingPct = totalEmployeesCount > 0 || filteredCheckIns.length > 0
+    ? Math.max(0, 100 - joinPct - skipPct)
+    : 0;
+
+  const hasChartActivity = meetingJoinedCount + meetingSkippedCount + missingCount > 0;
+  const chartData = hasChartActivity
+    ? [
+        { name: 'เข้าร่วมประชุมเช้า', value: meetingJoinedCount, color: '#10B981', pct: joinPct },
+        { name: 'ไม่เข้าร่วม (ติดภารกิจ)', value: meetingSkippedCount, color: '#F43F5E', pct: skipPct },
+        { name: 'รอสแกนเช็คอิน', value: missingCount, color: '#CBD5E1', pct: missingPct },
+      ]
+    : [{ name: 'ยังไม่มีข้อมูล', value: 1, color: '#F1F5F9', pct: 0 }];
+
+  const activeCardTimeRange =
+    selectedDept === 'ALL'
+      ? defaultTimeRange
+      : deptTimeRanges[selectedDept] || defaultTimeRange;
 
   const checkedInIds = new Set(filteredCheckIns.map(c => c.userId));
   const missingEmployees = filteredEmployees.filter(e => !checkedInIds.has(e.id));
@@ -278,65 +305,174 @@ export function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <p className="text-sm text-slate-500 font-medium">รายชื่อพนักงาน ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})</p>
-          <h2 className="text-3xl font-bold text-slate-900 mt-1">{filteredEmployees.length}</h2>
+          <h2 className="text-3xl font-bold text-slate-900 mt-1 tabular-nums">{filteredEmployees.length}</h2>
           <div className="mt-2 flex items-center text-blue-600 text-xs font-bold">
             <Users className="w-3 h-3 mr-1" /> พนักงานที่เปิดใช้งาน
           </div>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <p className="text-sm text-slate-500 font-medium">เข้าร่วมประชุมเช้า</p>
-          <h2 className="text-3xl font-bold text-emerald-600 mt-1">{meetingJoinedCount}</h2>
+          <h2 className="text-3xl font-bold text-emerald-600 mt-1 tabular-nums">{meetingJoinedCount}</h2>
           <div className="mt-2 flex items-center text-emerald-600 text-xs font-bold">
             <CalendarCheck className="w-3 h-3 mr-1" /> เช็คอินสำเร็จ
           </div>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <p className="text-sm text-slate-500 font-medium">ไม่เข้าร่วมประชุมเช้า</p>
-          <h2 className="text-3xl font-bold text-rose-600 mt-1">{meetingSkippedCount}</h2>
+          <h2 className="text-3xl font-bold text-rose-600 mt-1 tabular-nums">{meetingSkippedCount}</h2>
           <div className="mt-2 flex items-center text-rose-600 text-xs font-bold">
             <CalendarX className="w-3 h-3 mr-1" /> ติดภารกิจอื่น
           </div>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <p className="text-sm text-slate-500 font-medium">ยังไม่สแกน QR Code</p>
-          <h2 className="text-3xl font-bold text-slate-400 mt-1">{Math.max(0, missingCount)}</h2>
+          <h2 className="text-3xl font-bold text-slate-400 mt-1 tabular-nums">{Math.max(0, missingCount)}</h2>
           <div className="mt-2 flex items-center text-slate-400 text-xs font-bold">
             <AlertCircle className="w-3 h-3 mr-1" /> ขาดหาย
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-6">
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
-          <h3 className="font-bold text-slate-800 text-lg mb-4">สถิติการประชุมเช้า ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})</h3>
-          <div className="h-64">
+      <div className="grid grid-cols-12 gap-6 items-stretch">
+        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[27rem] lg:h-[28rem] flex flex-col justify-between">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="font-bold text-slate-900 text-lg leading-snug">
+                สถิติการประชุมเช้า ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                เวลาประชุม {activeCardTimeRange} น. <span aria-hidden="true">·</span> พนักงาน {totalEmployeesCount} คน
+              </p>
+            </div>
+            <div className="text-right tabular-nums">
+              <span className="text-xs text-slate-500 block">เช็คอินแล้ว</span>
+              <span className="text-sm font-bold text-slate-900">
+                {filteredCheckIns.length}/{totalEmployeesCount} คน
+              </span>
+            </div>
+          </div>
+
+          <div className="relative h-44 my-2 flex items-center justify-center">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
                   data={chartData}
                   cx="50%"
                   cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
+                  innerRadius={56}
+                  outerRadius={76}
+                  paddingAngle={hasChartActivity ? 3 : 0}
+                  cornerRadius={hasChartActivity ? 6 : 0}
                   dataKey="value"
+                  stroke="none"
                 >
                   {chartData.map((entry, index) => (
-                     <Cell key={`cell-${index}`} fill={entry.color} />
+                    <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <RechartsTooltip />
-                <Legend />
+                {hasChartActivity && (
+                  <RechartsTooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload || !payload.length) return null;
+                      const item = payload[0].payload;
+                      return (
+                        <div className="bg-slate-900 text-white px-3 py-2 rounded-xl shadow-lg text-xs tabular-nums">
+                          <p className="font-bold">{item.name}</p>
+                          <p className="text-slate-300 mt-0.5">
+                            จำนวน <strong className="text-white">{item.value} คน</strong> ({item.pct}%)
+                          </p>
+                        </div>
+                      );
+                    }}
+                  />
+                )}
               </PieChart>
             </ResponsiveContainer>
+
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none">
+              <span className="text-2xl font-extrabold text-slate-900 tabular-nums tracking-tight leading-none">
+                {joinPct}%
+              </span>
+              <span className="text-[11px] font-semibold text-slate-500 mt-1">
+                เข้าประชุมเช้า
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {/* Multi-segment progress bar */}
+            <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden flex">
+              {meetingJoinedCount > 0 && (
+                <div
+                  style={{ width: `${joinPct}%` }}
+                  className="bg-emerald-500 h-full transition-all duration-300"
+                  title={`เข้าร่วมประชุมเช้า ${joinPct}%`}
+                />
+              )}
+              {meetingSkippedCount > 0 && (
+                <div
+                  style={{ width: `${skipPct}%` }}
+                  className="bg-rose-500 h-full transition-all duration-300"
+                  title={`ไม่เข้าร่วม ${skipPct}%`}
+                />
+              )}
+              {missingCount > 0 && (
+                <div
+                  style={{ width: `${missingPct}%` }}
+                  className="bg-slate-300 h-full transition-all duration-300"
+                  title={`รอสแกน ${missingPct}%`}
+                />
+              )}
+            </div>
+
+            {/* Structured Breakdown List */}
+            <div className="divide-y divide-slate-100 border-t border-slate-100 pt-1 text-xs">
+              <div className="py-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 shrink-0" />
+                    <span className="font-bold text-slate-800 truncate">เข้าร่วมประชุมเช้า</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 pl-4.5 mt-0.5 tabular-nums">
+                    ตรงเวลา {onTimeCount} คน <span aria-hidden="true">·</span> สาย {lateCount} คน
+                  </p>
+                </div>
+                <div className="text-right tabular-nums shrink-0">
+                  <span className="font-bold text-emerald-600 text-sm">{meetingJoinedCount} คน</span>
+                  <span className="text-slate-400 ml-1.5">({joinPct}%)</span>
+                </div>
+              </div>
+
+              <div className="py-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-rose-500 shrink-0" />
+                  <span className="font-bold text-slate-700 truncate">ไม่เข้าร่วม (ติดภารกิจ)</span>
+                </div>
+                <div className="text-right tabular-nums shrink-0">
+                  <span className="font-bold text-rose-600 text-sm">{meetingSkippedCount} คน</span>
+                  <span className="text-slate-400 ml-1.5">({skipPct}%)</span>
+                </div>
+              </div>
+
+              <div className="py-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-slate-300 shrink-0" />
+                  <span className="font-bold text-slate-600 truncate">รอสแกน QR Code</span>
+                </div>
+                <div className="text-right tabular-nums shrink-0">
+                  <span className="font-bold text-slate-700 text-sm">{missingCount} คน</span>
+                  <span className="text-slate-400 ml-1.5">({missingPct}%)</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-96 flex flex-col">
+        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[27rem] lg:h-[28rem] flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-800 text-lg">พนักงานที่ยังไม่เช็คอิน</h3>
-            <span className="bg-rose-100 text-rose-800 text-xs font-bold px-2 py-1 rounded-md">
-              {missingEmployees.length} คน
+            <span className="text-rose-600 text-xs font-bold tabular-nums">
+              รอสแกน {missingEmployees.length} คน
             </span>
           </div>
           
@@ -347,12 +483,12 @@ export function Dashboard() {
                 <p className="font-bold">สแกนครบทุกคนแล้ว!</p>
               </div>
             ) : (
-              <ul className="space-y-3">
+              <ul className="space-y-2.5">
                 {missingEmployees.map(emp => (
-                  <li key={emp.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <li key={emp.id} className="flex items-center justify-between bg-slate-50 px-3.5 py-2.5 rounded-xl border border-slate-100">
                     <span className="font-bold text-sm text-slate-800">{emp.name}</span>
-                    <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-700">
-                      {emp.department || 'IE'}
+                    <span className="text-xs font-semibold text-slate-500">
+                      แผนก {emp.department || 'IE'}
                     </span>
                   </li>
                 ))}
@@ -361,7 +497,7 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 h-96">
+        <div className="col-span-12 lg:col-span-4 min-h-[27rem] lg:h-[28rem]">
           <Leaderboard checkIns={filteredCheckIns} monthlyPointsMap={monthlyPointsMap} />
         </div>
       </div>

@@ -10,7 +10,6 @@ import {
   EyeOff,
   ArrowRight,
   AlertCircle,
-  KeyRound,
 } from 'lucide-react';
 
 export function Login() {
@@ -26,7 +25,6 @@ export function Login() {
   );
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
-  const [showHint, setShowHint] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [roleFilter, setRoleFilter] = useState<
@@ -339,41 +337,6 @@ export function Login() {
               </button>
             </form>
           ) : null}
-
-          {/* Quick PIN Helper for initial setup */}
-          <div className="mt-6 pt-4 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setShowHint(!showHint)}
-              className="flex items-center space-x-1.5 text-xs font-semibold text-slate-500 hover:text-blue-600 transition-colors"
-            >
-              <KeyRound className="w-3.5 h-3.5" />
-              <span>{showHint ? 'ซ่อนรหัส PIN เริ่มต้น' : 'ดูรหัส PIN เริ่มต้น (สามารถเปลี่ยนได้ในหน้าตั้งค่า Role)'}</span>
-            </button>
-
-            {showHint && selectedAccount && (
-              <div className="mt-2.5 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-600">
-                    รหัสปัจจุบันของ <strong>{formatAccountDisplayName(selectedAccount)}</strong>:
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPin(selectedAccount.pin);
-                      setError('');
-                    }}
-                    className="font-mono font-bold text-blue-600 hover:underline px-2 py-0.5 bg-blue-50 rounded"
-                  >
-                    {selectedAccount.pin} (คลิกเพื่อกรอก)
-                  </button>
-                </div>
-                <p className="text-slate-400 text-[11px]">
-                  *เมื่อเข้าสู่ระบบด้วย Super Admin แล้ว สามารถไปที่เมนู &ldquo;ตั้งค่า Role / สิทธิ์&rdquo; เพื่อเปลี่ยนรหัสผ่านหรือเพิ่มแผนกใหม่ได้ทันที
-                </p>
-              </div>
-            )}
-          </div>
         </div>
       </div>
     </div>

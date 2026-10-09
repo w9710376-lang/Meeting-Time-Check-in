@@ -1,6 +1,31 @@
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  initializeFirestore,
+  getFirestore,
+  setLogLevel,
+   Firestore,
+} from 'firebase/firestore';
 import config from '../../firebase-applet-config.json';
 
-const app = initializeApp(config);
-export const db = getFirestore(app, config.firestoreDatabaseId);
+// Suppress noisy internal Firestore connection retry console.error logs
+// when operating in proxy/iframe environments or during brief network switches
+setLogLevel('silent');
+
+const app = getApps().length > 0 ? getApp() : initializeApp(config);
+
+let firestoreDb: Firestore;
+try {
+  firestoreDb = initializeFirestore(
+    app,
+    {
+      experimentalAutoDetectLongPolling: true,
+      ignoreUndefinedProperties: true,
+    },
+    config.firestoreDatabaseId
+  );
+} catch {
+  firestoreDb = getFirestore(app, config.firestoreDatabaseId);
+}
+
+export const db = firestoreDb;
+

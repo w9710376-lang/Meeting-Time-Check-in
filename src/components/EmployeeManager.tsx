@@ -22,7 +22,11 @@ import {
   CheckCircle2,
   RefreshCw,
   HelpCircle,
+  Smartphone,
+  RotateCcw,
+  ShieldCheck,
 } from 'lucide-react';
+import { getShortDeviceCode } from '../lib/deviceFingerprint';
 
 interface ParsedUploadRow {
   rowIndex: number;
@@ -553,6 +557,27 @@ export function EmployeeManager() {
     }
   };
 
+  const resetDeviceBinding = async (emp: Employee) => {
+    try {
+      await updateDoc(doc(db, 'employees', emp.id), {
+        boundDeviceId: null,
+        boundHardwareSig: null,
+        boundDeviceLabel: null,
+        boundAt: null,
+      });
+      setImportFeedback({
+        type: 'success',
+        message: `ปลดล็อกเครื่องมือถือของ "${emp.name}" เรียบร้อยแล้ว พนักงานสามารถสแกนเพื่อผูกมือถือเครื่องใหม่ได้ทันที`,
+      });
+    } catch (error) {
+      console.error('Error resetting device binding:', error);
+      setImportFeedback({
+        type: 'error',
+        message: 'เกิดข้อผิดพลาดในการรีเซ็ตเครื่องที่ผูก กรุณาลองใหม่',
+      });
+    }
+  };
+
   const filteredEmployees = employees.filter(emp => {
     const empDept = emp.department || 'IE';
     const matchesDept = filterDept === 'ALL' || empDept === filterDept;
@@ -826,6 +851,7 @@ export function EmployeeManager() {
                 <th className="py-3 px-4 w-16 text-center">No.</th>
                 <th className="py-3 px-4">ชื่อ - นามสกุล</th>
                 <th className="py-3 px-4 text-center">แผนก</th>
+                <th className="py-3 px-4 text-center">อุปกรณ์ที่ผูก (1:1)</th>
                 <th className="py-3 px-4 text-center">สถานะ</th>
                 <th className="py-3 px-4 text-right">จัดการ</th>
               </tr>
@@ -833,7 +859,7 @@ export function EmployeeManager() {
             <tbody>
               {filteredEmployees.map((emp, index) => (
                 <tr key={emp.id} className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors ${!emp.isActive ? 'opacity-60' : ''}`}>
-                  <td className="py-3 px-4 text-center text-slate-500 font-medium">
+                  <td className="py-3 px-4 text-center text-slate-500 font-medium tabular-nums">
                     {index + 1}
                   </td>
                   <td className="py-3 px-4">
@@ -850,6 +876,37 @@ export function EmployeeManager() {
                         <option key={dept} value={dept}>{dept}</option>
                       ))}
                     </select>
+                  </td>
+                  <td className="py-3 px-4 text-center">
+                    {emp.boundDeviceId ? (
+                      <div className="inline-flex flex-col sm:flex-row items-center justify-center gap-2">
+                        <div className="text-left">
+                          <div className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 tabular-nums">
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>{getShortDeviceCode(emp.boundDeviceId)}</span>
+                          </div>
+                          {emp.boundDeviceLabel && (
+                            <p className="text-[11px] text-slate-500 leading-tight">
+                              {emp.boundDeviceLabel}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => resetDeviceBinding(emp)}
+                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                          title="ปลดล็อกเครื่องเดิม เพื่อให้พนักงานผูกกับโทรศัพท์เครื่องใหม่ได้"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>รีเซ็ตเครื่อง</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400">
+                        <Smartphone className="w-3.5 h-3.5" />
+                        <span>รอผูกเมื่อสแกนครั้งแรก</span>
+                      </span>
+                    )}
                   </td>
                   <td className="py-3 px-4 text-center">
                     <button
@@ -892,7 +949,7 @@ export function EmployeeManager() {
               
               {filteredEmployees.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-500">
+                  <td colSpan={6} className="py-8 text-center text-slate-500">
                     <Users className="w-12 h-12 mx-auto text-slate-300 mb-2" />
                     <p className="mb-4">ไม่พบรายชื่อพนักงานในหมวดที่เลือก</p>
                   </td>

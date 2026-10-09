@@ -5,7 +5,8 @@ import { CheckIn as CheckInType, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import QRCode from 'react-qr-code';
-import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2, Plus, X, Maximize2, Minimize2 } from 'lucide-react';
+import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2, Plus, X, Maximize2, Minimize2, ShieldCheck, Lock, Smartphone } from 'lucide-react';
+import { getOrCreateDeviceId, getHardwareSignature, getDeviceModelLabel, getShortDeviceCode } from '../lib/deviceFingerprint';
 
 type Step = 'scan' | 'select-name' | 'meeting' | 'processing' | 'success' | 'error';
 
@@ -68,14 +69,25 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     }
   };
 
-  // Real-time employee list
+  // Real-time employee list & today's check-ins
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [checkedInIds, setCheckedInIds] = useState<Set<string>>(new Set());
-  
+  const [todayCheckInsList, setTodayCheckInsList] = useState<CheckInType[]>([]);
+
+  // Persistent Device ID & Hardware Signature for Anti-Buddy-Punching
+  const [currentDeviceId] = useState<string>(() => getOrCreateDeviceId());
+  const [currentHardwareSig] = useState<string>(() => getHardwareSignature());
+  const [currentDeviceLabel] = useState<string>(() => getDeviceModelLabel());
+
   // Try to load remembered employee for scan mode
   const rememberedEmpId = localStorage.getItem('remembered_employee_id');
-  
+
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+
+  // Employee permanently bound to this phone in Cloud Firestore (1:1 Device Binding)
+  const boundOwner = employees.find(
+    (e) => e.boundDeviceId && e.boundDeviceId === currentDeviceId
+  ) || null;
   
   // Check if QR expired immediately on load
   const isQrExpired = isScanMode && (!urlScanTime || Date.now() - parseInt(urlScanTime, 10) > 30000);
@@ -212,19 +224,37 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       // Sort alphabetically once when data arrives, instead of every render tick
       emps.sort((a, b) => a.name.localeCompare(b.name, 'th'));
       setEmployees(emps);
-      
-      if (isScanMode && rememberedEmpId && !selectedEmployee) {
-        const found = emps.find(e => e.id === rememberedEmpId);
-        // Only auto-select remembered employee if they belong to the scanned department (if urlDept was specified)
-        const empDept = found?.department || 'IE';
-        if (found && (!urlDept || empDept === urlDept)) {
-          setSelectedEmployee(found);
+
+      if (isScanMode) {
+        // Priority 1: Check if this device is already bound to an employee in Cloud Firestore
+        const cloudBoundEmp = emps.find(
+          (e) => e.boundDeviceId && e.boundDeviceId === currentDeviceId
+        );
+        if (cloudBoundEmp) {
+          localStorage.setItem('remembered_employee_id', cloudBoundEmp.id);
+          const empDept = (cloudBoundEmp.department || 'IE').trim().toUpperCase();
+          setSelectedEmployee(cloudBoundEmp);
           setSelectedDept(empDept);
-        } else {
-          // If employee not found or belongs to another department, let user select from the scanned department
-          setStep('select-name');
-          if (!found) {
-            localStorage.removeItem('remembered_employee_id');
+          setStep((prev) => (prev === 'error' || prev === 'success' ? prev : 'meeting'));
+          return;
+        }
+
+        // Priority 2: Fallback to remembered_employee_id ONLY if that employee isn't bound to a different phone
+        if (rememberedEmpId && !selectedEmployee) {
+          const found = emps.find((e) => e.id === rememberedEmpId);
+          const isBoundToOtherPhone =
+            found?.boundDeviceId && found.boundDeviceId !== currentDeviceId;
+          const empDept = (found?.department || 'IE').trim().toUpperCase();
+          const scannedDeptNorm = urlDept ? urlDept.trim().toUpperCase() : null;
+
+          if (found && !isBoundToOtherPhone && (!scannedDeptNorm || empDept === scannedDeptNorm)) {
+            setSelectedEmployee(found);
+            setSelectedDept(empDept);
+          } else {
+            setStep((prev) => (prev === 'error' || prev === 'success' ? prev : 'select-name'));
+            if (!found || isBoundToOtherPhone) {
+              localStorage.removeItem('remembered_employee_id');
+            }
           }
         }
       }
@@ -234,8 +264,14 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     const checkinsQ = query(collection(db, 'checkins'), where('dateStr', '==', todayStr));
     const unsubscribeCheckins = onSnapshot(checkinsQ, (snapshot) => {
       const ids = new Set<string>();
-      snapshot.forEach(doc => ids.add(doc.data().userId));
+      const list: CheckInType[] = [];
+      snapshot.forEach((docSnap) => {
+        const d = docSnap.data() as CheckInType;
+        ids.add(d.userId);
+        list.push(d);
+      });
       setCheckedInIds(ids);
+      setTodayCheckInsList(list);
     }, console.warn);
     
     return () => {
@@ -248,22 +284,135 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     setStep('select-name');
   };
 
+  // Validate 4-Layer Anti-Buddy-Punching rules before allowing check-in in Scan Mode
+  const validateScanDeviceSecurity = (
+    targetEmp: Employee
+  ): { allowed: boolean; errorMsg?: string; suspiciousFlag?: boolean; suspiciousReason?: string } => {
+    if (!isScanMode) {
+      return { allowed: true };
+    }
+
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+    // Layer 1A: This physical device ID is already bound in Cloud Firestore to a DIFFERENT employee
+    const cloudBoundOwner = employees.find(
+      (e) => e.boundDeviceId && e.boundDeviceId === currentDeviceId
+    );
+    if (cloudBoundOwner && cloudBoundOwner.id !== targetEmp.id) {
+      return {
+        allowed: false,
+        errorMsg: `ปฏิเสธการสแกนแทนกัน: มือถือเครื่องนี้ (${getShortDeviceCode(
+          currentDeviceId
+        )}) ผูกกับชื่อ "${cloudBoundOwner.name}" ไปแล้ว ไม่สามารถใช้เช็คอินแทน "${
+          targetEmp.name
+        }" ได้`,
+      };
+    }
+
+    // Layer 1B: Target employee is already bound in Cloud Firestore to ANOTHER phone (blocks Incognito / Private Tab / another browser!)
+    if (targetEmp.boundDeviceId && targetEmp.boundDeviceId !== currentDeviceId) {
+      return {
+        allowed: false,
+        errorMsg: `ปฏิเสธการสแกนแทนกัน: ชื่อ "${
+          targetEmp.name
+        }" ได้ผูกกับมือถือเครื่องอื่นไว้แล้ว (${getShortDeviceCode(
+          targetEmp.boundDeviceId
+        )}) ไม่สามารถใช้เครื่องนี้หรือโหมดไม่ระบุตัวตนสแกนแทนได้ (หากเจ้าตัวเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้งหัวหน้าแผนกเพื่อกดรีเซ็ตเครื่อง)`,
+      };
+    }
+
+    // Layer 1C: LocalStorage or Firestore Today's Check-in already recorded this Device ID for someone else today
+    const lockedDate = localStorage.getItem('device_checkin_date');
+    const lockedEmp = localStorage.getItem('device_checkin_emp');
+    if (lockedDate === todayStr && lockedEmp && lockedEmp !== targetEmp.id) {
+      return {
+        allowed: false,
+        errorMsg:
+          'อุปกรณ์นี้ได้ทำการเช็คอินสำหรับวันนี้ไปแล้ว ไม่สามารถเช็คอินแทนบุคคลอื่นได้',
+      };
+    }
+
+    const sameDeviceTodayOtherUser = todayCheckInsList.find(
+      (c) => c.deviceId && c.deviceId === currentDeviceId && c.userId !== targetEmp.id
+    );
+    if (sameDeviceTodayOtherUser) {
+      return {
+        allowed: false,
+        errorMsg: `อุปกรณ์เครื่องนี้ (${getShortDeviceCode(
+          currentDeviceId
+        )}) ได้สแกนเช็คอินให้ "${sameDeviceTodayOtherUser.userName}" ในวันนี้ไปแล้ว ไม่สามารถสแกนแทนผู้อื่นได้`,
+      };
+    }
+
+    // Layer 2 & 3: Single-Use QR Token & Hardware Signature Cooldown (blocks Incognito when neither employee was bound yet)
+    if (urlScanTime) {
+      const reusedQrToken = todayCheckInsList.find(
+        (c) =>
+          c.qrToken === urlScanTime &&
+          c.userId !== targetEmp.id &&
+          (c.deviceId === currentDeviceId || c.hardwareSignature === currentHardwareSig)
+      );
+      if (reusedQrToken) {
+        return {
+          allowed: false,
+          errorMsg:
+            'รหัส QR Code รอบนี้ถูกใช้งานจากอุปกรณ์นี้ไปแล้ว ห้ามใช้มือถือเครื่องเดียวกันสแกนต่อเนื่องแทนกัน',
+        };
+      }
+    }
+
+    const sameHardwareOtherCheckIns = todayCheckInsList.filter(
+      (c) =>
+        c.hardwareSignature &&
+        c.hardwareSignature === currentHardwareSig &&
+        c.userId !== targetEmp.id
+    );
+
+    if (sameHardwareOtherCheckIns.length > 0) {
+      const mostRecent = sameHardwareOtherCheckIns.reduce((latest, curr) =>
+        curr.timestamp > latest.timestamp ? curr : latest
+      );
+      const diffMs = Math.abs(Date.now() - mostRecent.timestamp);
+      const diffSeconds = Math.round(diffMs / 1000);
+
+      // Block if the exact same hardware signature scanned for another employee within the last 3 minutes (180s)
+      if (diffMs < 3 * 60 * 1000) {
+        return {
+          allowed: false,
+          errorMsg: `ระบบป้องกันการสแกนแทนกันบล็อกรายการนี้: ตรวจพบมือถือฮาร์ดแวร์สเปกเดียวกัน (${currentDeviceLabel}) เพิ่งสแกนเช็คอินให้ "${mostRecent.userName}" เมื่อ ${diffSeconds} วินาทีที่แล้ว ห้ามเปิดโหมดไม่ระบุตัวตนหรือใช้เครื่องเดียวสแกนแทนกัน`,
+        };
+      }
+
+      // If between 3 and 10 minutes on the same hardware signature, allow but attach a suspicious audit flag for Dashboard/Excel
+      if (diffMs < 10 * 60 * 1000) {
+        return {
+          allowed: true,
+          suspiciousFlag: true,
+          suspiciousReason: `ฮาร์ดแวร์รุ่นเดียวกัน (${currentDeviceLabel}) สแกนห่างจาก ${mostRecent.userName} เพียง ${Math.ceil(
+            diffMs / 60000
+          )} นาที`,
+        };
+      }
+    }
+
+    return { allowed: true };
+  };
+
   const handleNameSelect = (employee: Employee) => {
     if (isScanMode) {
-      const todayStr = format(new Date(), 'yyyy-MM-dd');
-      const lockedDate = localStorage.getItem('device_checkin_date');
-      const lockedEmp = localStorage.getItem('device_checkin_emp');
-      
-      // Prevent selecting a different employee if this device already checked in today
-      if (lockedDate === todayStr && lockedEmp && lockedEmp !== employee.id) {
-        setMessage('อุปกรณ์นี้ได้ทำการเช็คอินสำหรับวันนี้ไปแล้ว ไม่สามารถเช็คอินแทนบุคคลอื่นได้');
+      const check = validateScanDeviceSecurity(employee);
+      if (!check.allowed) {
+        setMessage(
+          check.errorMsg ||
+            'อุปกรณ์นี้ไม่สามารถใช้เช็คอินแทนบุคคลอื่นได้'
+        );
         setStep('error');
         return;
       }
-      
+
       localStorage.setItem('remembered_employee_id', employee.id);
     }
-    
+
     setSelectedEmployee(employee);
     if (employee.department) {
       setSelectedDept(employee.department);
@@ -272,6 +421,26 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   };
 
   const handleMeetingSelect = (status: 'join' | 'skip') => {
+    if (!selectedEmployee) return;
+
+    // Re-validate all 4 layers at submission time
+    const securityCheck = validateScanDeviceSecurity(selectedEmployee);
+    if (!securityCheck.allowed) {
+      setMessage(
+        securityCheck.errorMsg ||
+          'อุปกรณ์นี้ไม่สามารถใช้เช็คอินแทนบุคคลอื่นได้'
+      );
+      setStep('error');
+      return;
+    }
+
+    // Prevent duplicate check-in if already checked in today
+    if (isScanMode && checkedInIds.has(selectedEmployee.id)) {
+      setMessage(`ชื่อ "${selectedEmployee.name}" ได้ทำการเช็คอินสำหรับวันนี้เรียบร้อยแล้ว`);
+      setStep('error');
+      return;
+    }
+
     setMeetingStatus(status);
     // ข้ามหน้าต่าง processing ไปเลยเพื่อให้ UI โหลดทันที (Optimistic UI)
     
@@ -334,7 +503,6 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         }
       }
       
-      if (!selectedEmployee) throw new Error("No employee selected");
       const checkInId = `${selectedEmployee.id}_${format(now, 'yyyy-MM-dd')}`;
       
       const newCheckIn: CheckInType = {
@@ -347,27 +515,43 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         status: checkInStatus,
         meetingStatus: status,
         dateStr: format(now, 'yyyy-MM-dd'),
-        earnedPoints: earnedPoints
+        earnedPoints: earnedPoints,
+        deviceId: isScanMode ? currentDeviceId : 'ADMIN_KIOSK',
+        hardwareSignature: isScanMode ? currentHardwareSig : 'KIOSK',
+        deviceLabel: isScanMode ? currentDeviceLabel : 'หน้าจอหลัก (Kiosk)',
+        qrToken: urlScanTime || undefined,
+        suspiciousFlag: securityCheck.suspiciousFlag || false,
+        suspiciousReason: securityCheck.suspiciousReason || undefined,
       };
 
-      // Update monthly accumulated points in employee profile (resets automatically each new month)
+      // Update monthly accumulated points AND bind device 1:1 in employee profile
       const currentMonthStr = format(now, 'yyyy-MM');
       const previousMonthlyPoints =
         selectedEmployee.pointsMonth === currentMonthStr ? (selectedEmployee.totalPoints || 0) : 0;
-      if (earnedPoints > 0 || selectedEmployee.pointsMonth !== currentMonthStr) {
-        setDoc(doc(db, 'employees', selectedEmployee.id), {
-          totalPoints: previousMonthlyPoints + earnedPoints,
-          pointsMonth: currentMonthStr
-        }, { merge: true }).catch(console.warn);
+
+      const empUpdatePayload: Record<string, any> = {
+        totalPoints: previousMonthlyPoints + earnedPoints,
+        pointsMonth: currentMonthStr,
+      };
+
+      // Layer 1: Permanently bind this mobile device 1:1 to this employee in Cloud Firestore on scan mode
+      if (isScanMode && !selectedEmployee.boundDeviceId) {
+        empUpdatePayload.boundDeviceId = currentDeviceId;
+        empUpdatePayload.boundHardwareSig = currentHardwareSig;
+        empUpdatePayload.boundDeviceLabel = currentDeviceLabel;
+        empUpdatePayload.boundAt = now.getTime();
       }
 
-      // Fire and forget
+      setDoc(doc(db, 'employees', selectedEmployee.id), empUpdatePayload, { merge: true }).catch(console.warn);
+
+      // Save check-in record
       setDoc(doc(db, 'checkins', checkInId), newCheckIn).catch(console.warn);
       
       // Record successful checkin on this device for today
       if (isScanMode) {
         localStorage.setItem('device_checkin_date', format(now, 'yyyy-MM-dd'));
         localStorage.setItem('device_checkin_emp', selectedEmployee.id);
+        localStorage.setItem('remembered_employee_id', selectedEmployee.id);
       }
       
       setStep('success');
@@ -411,11 +595,23 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   const resetFlow = () => {
     if (onComplete && !isScanMode) {
       onComplete();
+    } else if (isScanMode) {
+      if (boundOwner) {
+        setSelectedEmployee(boundOwner);
+        setSelectedDept(boundOwner.department || selectedDept);
+        setMeetingStatus(null);
+        setStep('meeting');
+      } else {
+        setSelectedEmployee(null);
+        setMeetingStatus(null);
+        setSearchQuery('');
+        setStep(rememberedEmpId ? 'meeting' : 'select-name');
+      }
     } else {
       setSelectedEmployee(null);
       setMeetingStatus(null);
       setSearchQuery('');
-      setStep(isScanMode ? (rememberedEmpId ? 'meeting' : 'select-name') : 'scan');
+      setStep('scan');
     }
   };
 
@@ -660,18 +856,42 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
             <div className="w-full space-y-2 max-h-60 overflow-y-auto pr-1">
               {filteredEmployees.length > 0 ? (
-                filteredEmployees.map(emp => (
-                  <button
-                    key={emp.id}
-                    onClick={() => handleNameSelect(emp)}
-                    className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
-                  >
-                    <div className="font-bold text-slate-900">{emp.name}</div>
-                    <span className="text-xs font-bold px-2.5 py-1 rounded-md bg-slate-100 text-slate-600">
-                      {emp.department || 'IE'}
-                    </span>
-                  </button>
-                ))
+                filteredEmployees.map(emp => {
+                  const isBoundToAnotherPhone =
+                    isScanMode && emp.boundDeviceId && emp.boundDeviceId !== currentDeviceId;
+                  const isBoundToThisPhone =
+                    isScanMode && emp.boundDeviceId && emp.boundDeviceId === currentDeviceId;
+                  return (
+                    <button
+                      key={emp.id}
+                      onClick={() => handleNameSelect(emp)}
+                      className={`w-full flex items-center justify-between p-3 border rounded-xl transition-colors text-left ${
+                        isBoundToAnotherPhone
+                          ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
+                          : 'bg-white border-slate-200 hover:border-blue-500 hover:bg-blue-50'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900">{emp.name}</div>
+                        {isBoundToAnotherPhone && (
+                          <div className="text-[11px] font-semibold text-rose-600 flex items-center gap-1 mt-0.5">
+                            <Lock className="w-3 h-3" />
+                            <span>ผูกกับมือถือเครื่องอื่นแล้ว ({getShortDeviceCode(emp.boundDeviceId)})</span>
+                          </div>
+                        )}
+                        {isBoundToThisPhone && (
+                          <div className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1 mt-0.5">
+                            <ShieldCheck className="w-3 h-3" />
+                            <span>ผูกกับมือถือเครื่องนี้แล้ว</span>
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-xs font-bold px-2.5 py-1 rounded-md bg-slate-100 text-slate-600 shrink-0">
+                        {emp.department || 'IE'}
+                      </span>
+                    </button>
+                  );
+                })
               ) : (
                 <div className="text-center p-4 text-slate-500 text-sm border border-dashed border-slate-300 rounded-xl">
                   ไม่พบรายชื่อในแผนก {selectedDept} ที่ยังไม่ได้เช็คอิน
@@ -715,16 +935,34 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             </div>
             
             {isScanMode && (
-              <button 
-                onClick={() => {
-                  localStorage.removeItem('remembered_employee_id');
-                  setSelectedEmployee(null);
-                  setStep('select-name');
-                }}
-                className="mt-6 text-sm text-slate-500 underline hover:text-blue-600"
-              >
-                ไม่ใช่นามสกุล/ชื่อฉันใช่ไหม? กดที่นี่เพื่อเปลี่ยนชื่อ
-              </button>
+              boundOwner || (selectedEmployee.boundDeviceId && selectedEmployee.boundDeviceId === currentDeviceId) ? (
+                <div className="mt-6 w-full p-3 bg-slate-100 border border-slate-200 rounded-xl text-center">
+                  <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-slate-700">
+                    <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>อุปกรณ์ผูกแบบ 1:1 กับชื่อ "{selectedEmployee.name}" แล้ว</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1 tabular-nums">
+                    รหัสเครื่อง: {getShortDeviceCode(currentDeviceId)} · ไม่สามารถเปลี่ยนชื่อเพื่อสแกนแทนผู้อื่นได้ (หากเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้งหัวหน้าแผนกเพื่อรีเซ็ตเครื่อง)
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-6 w-full space-y-2 text-center">
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 font-medium">
+                    <Smartphone className="w-3.5 h-3.5 inline mr-1 text-amber-600" />
+                    เมื่อกดยืนยันเช็คอิน ระบบจะผูกมือถือเครื่องนี้ ({getShortDeviceCode(currentDeviceId)}) กับชื่อ <strong>{selectedEmployee.name}</strong> แบบ 1:1 อัตโนมัติ
+                  </div>
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem('remembered_employee_id');
+                      setSelectedEmployee(null);
+                      setStep('select-name');
+                    }}
+                    className="text-xs text-slate-500 underline hover:text-blue-600 font-semibold"
+                  >
+                    ยังไม่ใช่ชื่อของคุณใช่ไหม? กดเพื่อเลือกชื่อใหม่ก่อนผูกเครื่อง
+                  </button>
+                </div>
+              )
             )}
           </div>
         )}
@@ -763,14 +1001,19 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             <div className="w-20 h-20 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4">
               <AlertTriangle className="w-10 h-10" />
             </div>
-            <h3 className="text-xl font-bold text-slate-900">เกิดข้อผิดพลาด</h3>
-            <p className="text-rose-700 font-medium mt-2 text-center max-w-xs">{message}</p>
+            <h3 className="text-xl font-bold text-slate-900">ไม่อนุญาตให้เช็คอิน</h3>
+            <p className="text-rose-700 font-medium mt-2 text-center max-w-xs text-sm leading-relaxed">{message}</p>
+            {isScanMode && (
+              <p className="text-[11px] text-slate-400 mt-3 tabular-nums">
+                รหัสอุปกรณ์ของคุณ: {getShortDeviceCode(currentDeviceId)} ({currentHardwareSig})
+              </p>
+            )}
             
             <button
-              onClick={() => setStep('meeting')}
-              className="mt-8 px-6 py-2 bg-slate-900 text-white font-bold rounded-lg hover:bg-slate-800 transition-colors"
+              onClick={resetFlow}
+              className="mt-6 px-6 py-2 bg-slate-900 text-white font-bold rounded-lg hover:bg-slate-800 transition-colors"
             >
-              ลองใหม่อีกครั้ง
+              กลับหน้าหลัก
             </button>
           </div>
         )}

@@ -445,6 +445,23 @@ export function RoleManager() {
                   </div>
                 );
               })}
+
+              {isSuperAdmin && deletedDepartments.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleRollbackDepartment(deletedDepartments[0].deptName)}
+                  disabled={restoringDept === deletedDepartments[0].deptName}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-xl text-xs font-bold transition-colors shadow-xs"
+                  title={`กดเพื่อ Rollback กู้คืนแผนก ${deletedDepartments[0].deptName} ล่าสุดทันที`}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>
+                    {restoringDept === deletedDepartments[0].deptName
+                      ? 'กำลังกู้คืน...'
+                      : `Rollback กู้คืน (${deletedDepartments[0].deptName})`}
+                  </span>
+                </button>
+              )}
             </div>
 
             {isSuperAdmin ? (

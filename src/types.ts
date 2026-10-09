@@ -53,6 +53,10 @@ export interface Employee {
   isActive: boolean;
   totalPoints?: number;
   pointsMonth?: string; // YYYY-MM for monthly point accumulation reset
+  boundDeviceId?: string | null;
+  boundHardwareSig?: string | null;
+  boundDeviceLabel?: string | null;
+  boundAt?: number | null;
   createdAt: number;
 }
 
@@ -70,6 +74,12 @@ export interface CheckIn {
   meetingStatus?: 'join' | 'skip';
   dateStr: string; // YYYY-MM-DD for easy querying
   earnedPoints?: number;
+  deviceId?: string;
+  hardwareSignature?: string;
+  deviceLabel?: string;
+  qrToken?: string;
+  suspiciousFlag?: boolean;
+  suspiciousReason?: string;
 }
 
 export interface DailySummary {
