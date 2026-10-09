@@ -72,6 +72,7 @@ export interface CheckIn {
   } | null;
   status: 'on-time' | 'late';
   meetingStatus?: 'join' | 'skip';
+  skipReason?: string;
   dateStr: string; // YYYY-MM-DD for easy querying
   earnedPoints?: number;
   deviceId?: string;

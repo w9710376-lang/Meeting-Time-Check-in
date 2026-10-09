@@ -62,6 +62,11 @@ export function Leaderboard({ checkIns = [], monthlyPointsMap = {} }: Leaderboar
                       {checkIn.earnedPoints ? ` · +${checkIn.earnedPoints} คะแนน` : ''}
                       {` · สะสม ${monthTotal} คะแนน`}
                     </p>
+                    {checkIn.meetingStatus === 'skip' && checkIn.skipReason && (
+                      <p className="text-[11px] font-medium text-rose-600 mt-0.5 truncate" title={checkIn.skipReason}>
+                        เหตุผล: {checkIn.skipReason}
+                      </p>
+                    )}
                     {checkIn.deviceId && (
                       <p className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1 tabular-nums">
                         <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />

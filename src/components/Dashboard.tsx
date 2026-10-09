@@ -189,6 +189,7 @@ export function Dashboard() {
           Points: data.earnedPoints || 0,
           MonthlyAccumulatedPoints: monthlyPointsMap[data.userId] || 0,
           MeetingStatus: data.meetingStatus === 'join' ? 'เข้าร่วมประชุม' : data.meetingStatus === 'skip' ? 'ไม่เข้าร่วมประชุม' : 'N/A',
+          SkipReason: data.meetingStatus === 'skip' ? (data.skipReason || 'ไม่ระบุเหตุผล') : '-',
           DeviceID: data.deviceId || '-',
           DeviceModel: data.deviceLabel || '-',
           SecurityVerification: data.suspiciousFlag

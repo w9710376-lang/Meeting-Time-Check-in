@@ -5,7 +5,7 @@ import { CheckIn as CheckInType, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import QRCode from 'react-qr-code';
-import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2, Plus, X, Maximize2, Minimize2, ShieldCheck, Lock, Smartphone } from 'lucide-react';
+import { MapPin, CheckCircle, AlertTriangle, Search, Users, CalendarX, CalendarCheck, Edit2, Check, Clock, Building2, Plus, X, Maximize2, Minimize2, ShieldCheck, Lock, Smartphone, MessageSquareText } from 'lucide-react';
 import { getOrCreateDeviceId, getHardwareSignature, getDeviceModelLabel, getShortDeviceCode } from '../lib/deviceFingerprint';
 import {
   getInitialCachedEmployees,
@@ -18,6 +18,14 @@ import {
 } from '../lib/checkinFastCache';
 
 type Step = 'scan' | 'select-name' | 'meeting' | 'processing' | 'success' | 'error';
+
+const SKIP_REASON_PRESETS = [
+  'ติดงานด่วนหน้างาน / เครื่องจักร',
+  'ติดประชุมอื่น / พบลูกค้า',
+  'ปฏิบัติงานนอกสถานที่',
+  'เข้ากะอื่น / สลับกะ',
+  'ลาป่วย / ลากิจ / พักร้อน',
+];
 
 function resolveScanEmployee(
   emps: Employee[],
@@ -161,6 +169,10 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   });
 
   const [meetingStatus, setMeetingStatus] = useState<'join' | 'skip' | null>(null);
+  const [showSkipReasonForm, setShowSkipReasonForm] = useState(false);
+  const [skipReasonPreset, setSkipReasonPreset] = useState<string>('');
+  const [skipReasonCustom, setSkipReasonCustom] = useState<string>('');
+  const [skipReasonError, setSkipReasonError] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [message, setMessage] = useState(isQrExpired ? 'QR Code หมดอายุ กรุณาสแกนใหม่จากหน้าจอหลัก' : '');
 
@@ -203,6 +215,10 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     setIsEditingTime(false);
     setSelectedEmployee(null);
     setMeetingStatus(null);
+    setShowSkipReasonForm(false);
+    setSkipReasonPreset('');
+    setSkipReasonCustom('');
+    setSkipReasonError('');
     setSearchQuery('');
     if (step === 'meeting') {
       setStep('select-name');
@@ -543,11 +559,20 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     if (employee.department) {
       setSelectedDept(employee.department);
     }
+    setShowSkipReasonForm(false);
+    setSkipReasonPreset('');
+    setSkipReasonCustom('');
+    setSkipReasonError('');
     setStep('meeting');
   };
 
-  const handleMeetingSelect = (status: 'join' | 'skip') => {
+  const handleMeetingSelect = (status: 'join' | 'skip', providedSkipReason?: string) => {
     if (!selectedEmployee) return;
+
+    const finalSkipReason =
+      status === 'skip'
+        ? (providedSkipReason ?? '').trim()
+        : '';
 
     // Re-validate all 4 layers at submission time
     const securityCheck = validateScanDeviceSecurity(selectedEmployee);
@@ -640,14 +665,15 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         location: null,
         status: checkInStatus,
         meetingStatus: status,
+        ...(status === 'skip' && finalSkipReason ? { skipReason: finalSkipReason } : {}),
         dateStr: format(now, 'yyyy-MM-dd'),
         earnedPoints: earnedPoints,
         deviceId: isScanMode ? currentDeviceId : 'ADMIN_KIOSK',
         hardwareSignature: isScanMode ? currentHardwareSig : 'KIOSK',
         deviceLabel: isScanMode ? currentDeviceLabel : 'หน้าจอหลัก (Kiosk)',
-        qrToken: urlScanTime || undefined,
+        ...(urlScanTime ? { qrToken: urlScanTime } : {}),
         suspiciousFlag: securityCheck.suspiciousFlag || false,
-        suspiciousReason: securityCheck.suspiciousReason || undefined,
+        ...(securityCheck.suspiciousReason ? { suspiciousReason: securityCheck.suspiciousReason } : {}),
       };
 
       // Update monthly accumulated points AND bind device 1:1 in employee profile
@@ -701,14 +727,44 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       
       if (earnedPoints > 0) {
         setMessage(`เช็คอินสำเร็จ! แผนก ${empDept} เข้าร่วมประชุมเช้า และได้รับ ${earnedPoints} คะแนน 🎉`);
+      } else if (status === 'skip') {
+        setMessage(
+          `เช็คอินสำเร็จ! คุณไม่เข้าร่วมประชุมเช้า (แผนก ${empDept})${
+            finalSkipReason ? ` · เหตุผล: ${finalSkipReason}` : ''
+          }`
+        );
       } else {
-        setMessage(`เช็คอินสำเร็จ! คุณ${status === 'join' ? 'เข้าร่วม' : 'ไม่เข้าร่วม'}ประชุมเช้า (แผนก ${empDept})`);
+        setMessage(`เช็คอินสำเร็จ! คุณเข้าร่วมประชุมเช้า (แผนก ${empDept})`);
       }
     } catch (error: any) {
       console.warn(error);
       setStep('success');
       setMessage(`เช็คอินสำเร็จ (โหมดออฟไลน์)! คุณ${status === 'join' ? 'เข้าร่วม' : 'ไม่เข้าร่วม'}ประชุมเช้า`);
     }
+  };
+
+  const handleConfirmSkipWithReason = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const customTrimmed = skipReasonCustom.trim();
+    let combinedReason = '';
+    if (skipReasonPreset && customTrimmed) {
+      combinedReason =
+        skipReasonPreset === customTrimmed
+          ? customTrimmed
+          : `${skipReasonPreset} (${customTrimmed})`;
+    } else if (skipReasonPreset) {
+      combinedReason = skipReasonPreset;
+    } else if (customTrimmed) {
+      combinedReason = customTrimmed;
+    }
+
+    if (!combinedReason) {
+      setSkipReasonError('กรุณาเลือกหัวข้อเหตุผล หรือพิมพ์ระบุเหตุผลที่ไม่เข้าร่วมประชุมเช้า');
+      return;
+    }
+
+    setSkipReasonError('');
+    handleMeetingSelect('skip', combinedReason);
   };
 
   useEffect(() => {
@@ -736,6 +792,10 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   };
 
   const resetFlow = () => {
+    setShowSkipReasonForm(false);
+    setSkipReasonPreset('');
+    setSkipReasonCustom('');
+    setSkipReasonError('');
     if (onComplete && !isScanMode) {
       onComplete();
     } else if (isScanMode) {
@@ -1120,7 +1180,12 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
             <div className="grid grid-cols-2 gap-4 w-full">
               <button
-                onClick={() => handleMeetingSelect('join')}
+                type="button"
+                onClick={() => {
+                  setShowSkipReasonForm(false);
+                  setSkipReasonError('');
+                  handleMeetingSelect('join');
+                }}
                 className="flex flex-col items-center p-4 bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/40 border border-emerald-200/90 rounded-xl hover:from-emerald-50 hover:to-teal-50/70 hover:border-emerald-500 shadow-xs transition-all group"
               >
                 <div className="w-12 h-12 bg-emerald-500/15 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
@@ -1129,8 +1194,16 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                 <span className="font-bold text-emerald-700 text-center">เข้าร่วมประชุมเช้า</span>
               </button>
               <button
-                onClick={() => handleMeetingSelect('skip')}
-                className="flex flex-col items-center p-4 bg-gradient-to-bl from-rose-50/70 via-white to-slate-50/60 border border-rose-200/80 rounded-xl hover:from-rose-50 hover:to-rose-50/40 hover:border-rose-400 shadow-xs transition-all group"
+                type="button"
+                onClick={() => {
+                  setShowSkipReasonForm(true);
+                  setSkipReasonError('');
+                }}
+                className={`flex flex-col items-center p-4 rounded-xl shadow-xs transition-all group border ${
+                  showSkipReasonForm
+                    ? 'bg-gradient-to-bl from-rose-100/90 via-rose-50/60 to-white border-rose-500 ring-2 ring-rose-500/20'
+                    : 'bg-gradient-to-bl from-rose-50/70 via-white to-slate-50/60 border-rose-200/80 hover:from-rose-50 hover:to-rose-50/40 hover:border-rose-400'
+                }`}
               >
                 <div className="w-12 h-12 bg-rose-500/15 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
                   <CalendarX className="w-6 h-6 text-rose-600" />
@@ -1138,6 +1211,85 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                 <span className="font-bold text-rose-700 text-center">ไม่เข้าร่วมประชุมเช้า</span>
               </button>
             </div>
+
+            {showSkipReasonForm && (
+              <form
+                onSubmit={handleConfirmSkipWithReason}
+                className="mt-4 w-full p-4 bg-gradient-to-b from-rose-50/60 via-white to-slate-50/60 border border-rose-200/90 rounded-2xl shadow-xs space-y-3 animate-in fade-in duration-150"
+              >
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <MessageSquareText className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>ระบุเหตุผลที่ไม่เข้าร่วมประชุมเช้า</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSkipReasonForm(false);
+                      setSkipReasonPreset('');
+                      setSkipReasonCustom('');
+                      setSkipReasonError('');
+                    }}
+                    className="text-xs font-semibold text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    ยกเลิก
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {SKIP_REASON_PRESETS.map((preset) => {
+                    const isSelected = skipReasonPreset === preset;
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setSkipReasonPreset(isSelected ? '' : preset);
+                          if (skipReasonError) setSkipReasonError('');
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all text-left ${
+                          isSelected
+                            ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-rose-300 hover:bg-rose-50/50'
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div>
+                  <input
+                    type="text"
+                    value={skipReasonCustom}
+                    onChange={(e) => {
+                      setSkipReasonCustom(e.target.value);
+                      if (skipReasonError) setSkipReasonError('');
+                    }}
+                    placeholder={
+                      skipReasonPreset
+                        ? 'รายละเอียดเพิ่มเติม (ถ้ามี เช่น เครื่องจักร Line 2)...'
+                        : 'หรือพิมพ์ระบุเหตุผลของคุณที่นี่...'
+                    }
+                    maxLength={120}
+                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 text-slate-800 placeholder:text-slate-400"
+                  />
+                </div>
+
+                {skipReasonError && (
+                  <p className="text-xs font-semibold text-rose-600">{skipReasonError}</p>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>ยืนยันเช็คอิน (ไม่เข้าร่วมประชุมเช้า)</span>
+                </button>
+              </form>
+            )}
             
             {isScanMode && (
               boundOwner || (selectedEmployee.boundDeviceId && selectedEmployee.boundDeviceId === currentDeviceId) ? (
