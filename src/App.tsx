@@ -30,7 +30,7 @@ function AppContent() {
   // Render CheckIn immediately in scan mode without blocking on auth or heavy admin bundles
   if (isScanMode) {
     return (
-      <div className="min-h-screen bg-slate-50 p-4 md:p-8 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-blue-50/60 p-4 md:p-8 flex items-center justify-center">
         <CheckIn />
       </div>
     );

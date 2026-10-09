@@ -41,8 +41,8 @@ export function Layout() {
       : `แผนก ${profile.departmentScope}`;
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden">
-      <aside className="w-64 bg-slate-900 text-white flex flex-col">
+    <div className="flex h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-blue-50/40 font-sans text-slate-900 overflow-hidden">
+      <aside className="w-64 bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white flex flex-col border-r border-slate-800/80">
         <div className="p-6 flex items-center space-x-3">
           <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-xl">
             M

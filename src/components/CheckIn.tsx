@@ -795,8 +795,8 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   }, [deptEmployees, checkedInIds, searchQuery]);
 
   return (
-    <div className="max-w-md mx-auto bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-200">
-      <div className="bg-slate-900 px-6 py-7 text-center text-white border-b-4 border-blue-500 relative">
+    <div className="max-w-md w-full mx-auto bg-white rounded-2xl shadow-md overflow-hidden border border-slate-200/80">
+      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 px-6 py-7 text-center text-white border-b border-blue-400/30 relative">
         <h2 className="text-2xl font-bold tracking-tight">Meeting Time Check-in</h2>
 
         {/* Department Selector Tabs */}
@@ -907,9 +907,9 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         </div>
 
         <div className="mt-5 flex justify-center items-center space-x-2 text-5xl font-bold text-white tabular-nums tracking-tighter">
-          <span>{format(currentTime, 'HH:mm')}</span><span className="text-blue-500 opacity-80 text-3xl">:{format(currentTime, 'ss')}</span>
+          <span>{format(currentTime, 'HH:mm')}</span><span className="text-blue-400 opacity-85 text-3xl">:{format(currentTime, 'ss')}</span>
         </div>
-        <p className="mt-2 text-slate-400 text-sm font-semibold uppercase tracking-wider">{format(currentTime, 'EEEE, MMM do')}</p>
+        <p className="mt-2 text-slate-300/80 text-sm font-semibold uppercase tracking-wider">{format(currentTime, 'EEEE, MMM do')}</p>
         
         <div className="mt-4 flex justify-center items-center">
           {isEditingTime ? (
@@ -931,7 +931,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
               </button>
             </div>
           ) : (
-            <div className="flex items-center space-x-2 text-slate-300 text-sm bg-slate-800/50 px-4 py-2 rounded-full border border-slate-700/50 group">
+            <div className="flex items-center space-x-2 text-slate-200 text-sm bg-slate-800/60 px-4 py-2 rounded-full border border-slate-700/60 group">
               <Clock className="w-4 h-4 text-blue-400" />
               <span>เวลาเข้าประชุม ({selectedDept}): <strong className="text-white">{targetTimeRange} น.</strong></span>
               {canEditTime && (
@@ -948,13 +948,13 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         </div>
         
         {step !== 'scan' && (
-          <button onClick={resetFlow} className="absolute top-4 right-4 text-xs font-bold text-slate-400 hover:text-white px-2 py-1 rounded bg-slate-800 transition-colors">
+          <button onClick={resetFlow} className="absolute top-4 right-4 text-xs font-bold text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 transition-colors">
             เริ่มใหม่
           </button>
         )}
       </div>
       
-      <div className="p-6 bg-slate-50 min-h-[350px] flex flex-col justify-center relative">
+      <div className="p-6 bg-gradient-to-b from-slate-100/75 via-slate-50/90 to-white min-h-[350px] flex flex-col justify-center relative">
         {step === 'scan' && (
           <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
             {isCheckInOpen() ? (
@@ -1014,31 +1014,31 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             <h3 className="text-lg font-bold text-slate-900">ค้นหารายชื่อของคุณ</h3>
             <p className="text-slate-500 text-sm mt-1 text-center mb-3">แสดงเฉพาะรายชื่อพนักงานในแผนก {selectedDept}</p>
 
-            {/* Summary counts: เช็คอินสำเร็จ & รอสแกน */}
+            {/* Summary counts: เช็คอินสำเร็จ & รอสแกน with harmonized gradient backgrounds */}
             <div className="grid grid-cols-2 gap-2.5 w-full mb-4">
-              <div className="flex items-center justify-between px-3 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl shadow-xs">
+              <div className="flex items-center justify-between px-3.5 py-2.5 bg-gradient-to-r from-emerald-50/90 via-teal-50/50 to-sky-50/40 border border-emerald-200/75 rounded-xl shadow-xs">
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-500/15 text-emerald-600 flex items-center justify-center shrink-0">
                     <CheckCircle className="w-4 h-4" />
                   </div>
-                  <span className="text-xs font-bold text-emerald-800 truncate">เช็คอินสำเร็จ</span>
+                  <span className="text-xs font-bold text-slate-700 truncate">เช็คอินสำเร็จ</span>
                 </div>
                 <div className="text-right shrink-0 ml-1">
-                  <span className="text-base font-extrabold text-emerald-700 tabular-nums">{deptCheckedInCount}</span>
-                  <span className="text-[11px] font-semibold text-emerald-600 ml-1">คน</span>
+                  <span className="text-base font-extrabold text-emerald-600 tabular-nums">{deptCheckedInCount}</span>
+                  <span className="text-[11px] font-semibold text-slate-500 ml-1">คน</span>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl shadow-xs">
+              <div className="flex items-center justify-between px-3.5 py-2.5 bg-gradient-to-l from-blue-50/90 via-sky-50/50 to-teal-50/40 border border-blue-200/75 rounded-xl shadow-xs">
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                  <div className="w-7 h-7 rounded-lg bg-blue-500/15 text-blue-600 flex items-center justify-center shrink-0">
                     <Clock className="w-4 h-4" />
                   </div>
-                  <span className="text-xs font-bold text-amber-800 truncate">รอสแกน</span>
+                  <span className="text-xs font-bold text-slate-700 truncate">รอสแกน</span>
                 </div>
                 <div className="text-right shrink-0 ml-1">
-                  <span className="text-base font-extrabold text-amber-700 tabular-nums">{deptPendingCount}</span>
-                  <span className="text-[11px] font-semibold text-amber-600 ml-1">คน</span>
+                  <span className="text-base font-extrabold text-blue-600 tabular-nums">{deptPendingCount}</span>
+                  <span className="text-[11px] font-semibold text-slate-500 ml-1">คน</span>
                 </div>
               </div>
             </div>
@@ -1050,7 +1050,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={`พิมพ์ชื่อพนักงานแผนก ${selectedDept}...`}
-                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200/90 rounded-xl shadow-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
               />
             </div>
 
@@ -1121,18 +1121,18 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             <div className="grid grid-cols-2 gap-4 w-full">
               <button
                 onClick={() => handleMeetingSelect('join')}
-                className="flex flex-col items-center p-4 bg-white border-2 border-emerald-200 rounded-xl hover:bg-emerald-50 hover:border-emerald-500 transition-colors group"
+                className="flex flex-col items-center p-4 bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/40 border border-emerald-200/90 rounded-xl hover:from-emerald-50 hover:to-teal-50/70 hover:border-emerald-500 shadow-xs transition-all group"
               >
-                <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                <div className="w-12 h-12 bg-emerald-500/15 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
                   <CalendarCheck className="w-6 h-6 text-emerald-600" />
                 </div>
                 <span className="font-bold text-emerald-700 text-center">เข้าร่วมประชุมเช้า</span>
               </button>
               <button
                 onClick={() => handleMeetingSelect('skip')}
-                className="flex flex-col items-center p-4 bg-white border-2 border-rose-200 rounded-xl hover:bg-rose-50 hover:border-rose-500 transition-colors group"
+                className="flex flex-col items-center p-4 bg-gradient-to-bl from-rose-50/70 via-white to-slate-50/60 border border-rose-200/80 rounded-xl hover:from-rose-50 hover:to-rose-50/40 hover:border-rose-400 shadow-xs transition-all group"
               >
-                <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                <div className="w-12 h-12 bg-rose-500/15 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
                   <CalendarX className="w-6 h-6 text-rose-600" />
                 </div>
                 <span className="font-bold text-rose-700 text-center">ไม่เข้าร่วมประชุมเช้า</span>

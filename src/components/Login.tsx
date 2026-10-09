@@ -87,10 +87,10 @@ export function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-900 flex flex-col justify-center items-center p-4 md:p-8">
-      <div className="w-full max-w-5xl bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden grid grid-cols-1 lg:grid-cols-12">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 text-slate-900 flex flex-col justify-center items-center p-4 md:p-8">
+      <div className="w-full max-w-5xl bg-white rounded-2xl border border-slate-200/80 shadow-2xl overflow-hidden grid grid-cols-1 lg:grid-cols-12">
         {/* Left Column: Department & Account Selector */}
-        <div className="lg:col-span-7 p-6 md:p-8 bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col justify-between">
+        <div className="lg:col-span-7 p-6 md:p-8 bg-gradient-to-r from-slate-100/90 via-slate-50/90 to-blue-50/40 border-b lg:border-b-0 lg:border-r border-slate-200/70 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between gap-3 mb-2">
               <div className="flex items-center space-x-3">
@@ -234,7 +234,7 @@ export function Login() {
         </div>
 
         {/* Right Column: PIN / Password Entry */}
-        <div className="lg:col-span-5 p-6 md:p-8 flex flex-col justify-between bg-white">
+        <div className="lg:col-span-5 p-6 md:p-8 flex flex-col justify-between bg-gradient-to-l from-white via-white to-blue-50/30">
           {selectedAccount ? (
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
