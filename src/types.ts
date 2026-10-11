@@ -71,6 +71,8 @@ export interface CheckIn {
     lng: number;
   } | null;
   status: 'on-time' | 'late';
+  designatedTimeRange?: string;
+  delayMinutes?: number;
   meetingStatus?: 'join' | 'skip';
   skipReason?: string;
   dateStr: string; // YYYY-MM-DD for easy querying

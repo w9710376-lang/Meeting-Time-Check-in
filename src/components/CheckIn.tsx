@@ -16,6 +16,7 @@ import {
   saveCachedTimeRanges,
   fetchFastCheckinCache,
 } from '../lib/checkinFastCache';
+import { getNonWorkingDayInfo } from '../lib/thaiHolidays';
 
 type Step = 'scan' | 'select-name' | 'meeting' | 'processing' | 'success' | 'error';
 
@@ -627,6 +628,9 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       
       const isOnTime = timeVal <= limitTimeVal;
       const checkInStatus = isOnTime ? 'on-time' : 'late';
+      const delayMinutes = isOnTime
+        ? 0
+        : Math.max(1, Math.round((hours * 60 + minutes) - (endHours * 60 + endMinutes)));
       
       // Calculate earned points dynamically
       let earnedPoints = 0;
@@ -664,6 +668,8 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         timestamp: now.getTime(),
         location: null,
         status: checkInStatus,
+        designatedTimeRange: activeTimeRange,
+        delayMinutes,
         meetingStatus: status,
         ...(status === 'skip' && finalSkipReason ? { skipReason: finalSkipReason } : {}),
         dateStr: format(now, 'yyyy-MM-dd'),
@@ -855,8 +861,12 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   }, [deptEmployees, checkedInIds, searchQuery]);
 
   return (
-    <div className="max-w-md w-full mx-auto bg-white rounded-2xl shadow-md overflow-hidden border border-slate-200/80">
-      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 px-6 py-7 text-center text-white border-b border-blue-400/30 relative">
+    <div
+      className={`w-full sm:max-w-md mx-auto bg-white sm:rounded-2xl sm:shadow-md overflow-hidden sm:border border-slate-200/80 flex flex-col ${
+        isScanMode ? 'min-h-[100dvh] sm:min-h-0' : 'flex-1 sm:flex-initial min-h-full sm:min-h-0'
+      }`}
+    >
+      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 px-4 sm:px-6 py-5 sm:py-7 text-center text-white border-b border-blue-400/30 relative shrink-0">
         <h2 className="text-2xl font-bold tracking-tight">Meeting Time Check-in</h2>
 
         {/* Department Selector Tabs */}
@@ -970,6 +980,15 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
           <span>{format(currentTime, 'HH:mm')}</span><span className="text-blue-400 opacity-85 text-3xl">:{format(currentTime, 'ss')}</span>
         </div>
         <p className="mt-2 text-slate-300/80 text-sm font-semibold uppercase tracking-wider">{format(currentTime, 'EEEE, MMM do')}</p>
+        {(() => {
+          const holidayInfo = getNonWorkingDayInfo(currentTime);
+          if (!holidayInfo) return null;
+          return (
+            <p className="mt-1.5 text-xs font-medium text-amber-300/95">
+              วันหยุด ({holidayInfo.name}) · ไม่นำมาคำนวณวันที่ต้องสแกน
+            </p>
+          );
+        })()}
         
         <div className="mt-4 flex justify-center items-center">
           {isEditingTime ? (
@@ -1014,7 +1033,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         )}
       </div>
       
-      <div className="p-6 bg-gradient-to-b from-slate-100/75 via-slate-50/90 to-white min-h-[350px] flex flex-col justify-center relative">
+      <div className="p-4 sm:p-6 bg-gradient-to-b from-slate-100/75 via-slate-50/90 to-white flex-1 min-h-[350px] flex flex-col justify-center relative">
         {step === 'scan' && (
           <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
             {isCheckInOpen() ? (
@@ -1114,7 +1133,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
               />
             </div>
 
-            <div className="w-full space-y-2 max-h-60 overflow-y-auto pr-1">
+            <div className="w-full space-y-2 flex-1 max-h-[50dvh] sm:max-h-60 overflow-y-auto pr-1">
               {filteredEmployees.length > 0 ? (
                 filteredEmployees.map(emp => {
                   const isBoundToAnotherPhone =

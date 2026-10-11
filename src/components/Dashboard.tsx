@@ -4,17 +4,18 @@ import { db } from '../lib/firebase';
 import { CheckIn, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 import * as XLSX from 'xlsx';
 import QRCode from 'react-qr-code';
 import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, Maximize2, Minimize2, Building2, X } from 'lucide-react';
 import { Leaderboard } from './Leaderboard';
+import { MorningMeeting3DCard } from './MorningMeeting3DCard';
 import {
   getInitialCachedEmployees,
   saveCachedEmployees,
   saveCachedTodayCheckIns,
   saveCachedTimeRanges,
 } from '../lib/checkinFastCache';
+import { getNonWorkingDayInfo, isWorkingDay } from '../lib/thaiHolidays';
 
 export function Dashboard() {
   const { profile, departments } = useAuth();
@@ -166,8 +167,13 @@ export function Dashboard() {
 
   const monthlyPointsMap: Record<string, number> = {};
   monthCheckIns.forEach((c) => {
-    monthlyPointsMap[c.userId] = (monthlyPointsMap[c.userId] || 0) + (c.earnedPoints || 0);
+    if (c.dateStr && isWorkingDay(c.dateStr)) {
+      monthlyPointsMap[c.userId] = (monthlyPointsMap[c.userId] || 0) + (c.earnedPoints || 0);
+    }
   });
+
+  const todayHolidayInfo = getNonWorkingDayInfo(currentTime);
+  const isTodayNonWorking = todayHolidayInfo !== null;
 
   const handleExport = async () => {
     try {
@@ -178,6 +184,7 @@ export function Dashboard() {
       checkinsSnap.forEach((doc) => {
         const data = doc.data() as CheckIn;
         if (!data.dateStr || !data.dateStr.startsWith(currentMonthPrefix)) return;
+        if (!isWorkingDay(data.dateStr)) return;
         const dept = data.department || empDeptMap.get(data.userId) || 'IE';
         if (selectedDept !== 'ALL' && dept !== selectedDept) return;
         allCheckins.push({
@@ -225,7 +232,9 @@ export function Dashboard() {
   const meetingSkippedCount = filteredCheckIns.filter(c => c.meetingStatus === 'skip').length;
   const onTimeCount = filteredCheckIns.filter(c => c.status === 'on-time').length;
   const lateCount = filteredCheckIns.filter(c => c.status === 'late').length;
-  const missingCount = Math.max(0, totalEmployeesCount - filteredCheckIns.length);
+  const missingCount = isTodayNonWorking
+    ? 0
+    : Math.max(0, totalEmployeesCount - filteredCheckIns.length);
 
   const denominator = Math.max(1, totalEmployeesCount || filteredCheckIns.length);
   const joinPct = totalEmployeesCount > 0 || filteredCheckIns.length > 0
@@ -324,6 +333,19 @@ export function Dashboard() {
         </div>
       </div>
 
+      {todayHolidayInfo && (
+        <div className="bg-amber-50/90 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="text-sm text-amber-900">
+            <span className="font-bold">วันนี้เป็นวันหยุด ({todayHolidayInfo.name})</span>
+            <span className="mx-2 text-amber-400" aria-hidden="true">·</span>
+            <span className="text-amber-800">
+              ระบบตัดวันเสาร์-อาทิตย์ และวันหยุดตามปฏิทินไทยออกอัตโนมัติ โดยไม่นำวันนี้มาคำนวณเป็นวันที่ต้องสแกน
+            </span>
+          </div>
+          <span className="text-xs font-bold text-amber-700 shrink-0">ไม่ต้องสแกนเช็คอิน</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <p className="text-sm text-slate-500 font-medium">รายชื่อพนักงาน ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})</p>
@@ -350,147 +372,31 @@ export function Dashboard() {
           <p className="text-sm text-slate-500 font-medium">ยังไม่สแกน QR Code</p>
           <h2 className="text-3xl font-bold text-slate-400 mt-1 tabular-nums">{Math.max(0, missingCount)}</h2>
           <div className="mt-2 flex items-center text-slate-400 text-xs font-bold">
-            <AlertCircle className="w-3 h-3 mr-1" /> ขาดหาย
+            <AlertCircle className="w-3 h-3 mr-1" />{' '}
+            {todayHolidayInfo ? `วันหยุด (${todayHolidayInfo.name})` : 'ขาดหาย'}
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-12 gap-6 items-stretch">
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[27rem] lg:h-[28rem] flex flex-col justify-between">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <h3 className="font-bold text-slate-900 text-lg leading-snug">
-                สถิติการประชุมเช้า ({selectedDept === 'ALL' ? 'ทุกแผนก' : selectedDept})
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
-                เวลาประชุม {activeCardTimeRange} น. <span aria-hidden="true">·</span> พนักงาน {totalEmployeesCount} คน
-              </p>
-            </div>
-            <div className="text-right tabular-nums">
-              <span className="text-xs text-slate-500 block">เช็คอินแล้ว</span>
-              <span className="text-sm font-bold text-slate-900">
-                {filteredCheckIns.length}/{totalEmployeesCount} คน
-              </span>
-            </div>
-          </div>
+        <MorningMeeting3DCard
+          selectedDept={selectedDept}
+          activeCardTimeRange={activeCardTimeRange}
+          totalEmployeesCount={totalEmployeesCount}
+          filteredCheckIns={filteredCheckIns}
+          filteredEmployees={filteredEmployees}
+          missingEmployees={missingEmployees}
+          meetingJoinedCount={meetingJoinedCount}
+          meetingSkippedCount={meetingSkippedCount}
+          onTimeCount={onTimeCount}
+          lateCount={lateCount}
+          missingCount={missingCount}
+          joinPct={joinPct}
+          skipPct={skipPct}
+          missingPct={missingPct}
+        />
 
-          <div className="relative h-44 my-2 flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={56}
-                  outerRadius={76}
-                  paddingAngle={hasChartActivity ? 3 : 0}
-                  cornerRadius={hasChartActivity ? 6 : 0}
-                  dataKey="value"
-                  stroke="none"
-                >
-                  {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                {hasChartActivity && (
-                  <RechartsTooltip
-                    content={({ active, payload }) => {
-                      if (!active || !payload || !payload.length) return null;
-                      const item = payload[0].payload;
-                      return (
-                        <div className="bg-slate-900 text-white px-3 py-2 rounded-xl shadow-lg text-xs tabular-nums">
-                          <p className="font-bold">{item.name}</p>
-                          <p className="text-slate-300 mt-0.5">
-                            จำนวน <strong className="text-white">{item.value} คน</strong> ({item.pct}%)
-                          </p>
-                        </div>
-                      );
-                    }}
-                  />
-                )}
-              </PieChart>
-            </ResponsiveContainer>
-
-            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none">
-              <span className="text-2xl font-extrabold text-slate-900 tabular-nums tracking-tight leading-none">
-                {joinPct}%
-              </span>
-              <span className="text-[11px] font-semibold text-slate-500 mt-1">
-                เข้าประชุมเช้า
-              </span>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {/* Multi-segment progress bar */}
-            <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden flex">
-              {meetingJoinedCount > 0 && (
-                <div
-                  style={{ width: `${joinPct}%` }}
-                  className="bg-emerald-500 h-full transition-all duration-300"
-                  title={`เข้าร่วมประชุมเช้า ${joinPct}%`}
-                />
-              )}
-              {meetingSkippedCount > 0 && (
-                <div
-                  style={{ width: `${skipPct}%` }}
-                  className="bg-rose-500 h-full transition-all duration-300"
-                  title={`ไม่เข้าร่วม ${skipPct}%`}
-                />
-              )}
-              {missingCount > 0 && (
-                <div
-                  style={{ width: `${missingPct}%` }}
-                  className="bg-slate-300 h-full transition-all duration-300"
-                  title={`รอสแกน ${missingPct}%`}
-                />
-              )}
-            </div>
-
-            {/* Structured Breakdown List */}
-            <div className="divide-y divide-slate-100 border-t border-slate-100 pt-1 text-xs">
-              <div className="py-2 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 shrink-0" />
-                    <span className="font-bold text-slate-800 truncate">เข้าร่วมประชุมเช้า</span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 pl-4.5 mt-0.5 tabular-nums">
-                    ตรงเวลา {onTimeCount} คน <span aria-hidden="true">·</span> สาย {lateCount} คน
-                  </p>
-                </div>
-                <div className="text-right tabular-nums shrink-0">
-                  <span className="font-bold text-emerald-600 text-sm">{meetingJoinedCount} คน</span>
-                  <span className="text-slate-400 ml-1.5">({joinPct}%)</span>
-                </div>
-              </div>
-
-              <div className="py-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-rose-500 shrink-0" />
-                  <span className="font-bold text-slate-700 truncate">ไม่เข้าร่วม (ติดภารกิจ)</span>
-                </div>
-                <div className="text-right tabular-nums shrink-0">
-                  <span className="font-bold text-rose-600 text-sm">{meetingSkippedCount} คน</span>
-                  <span className="text-slate-400 ml-1.5">({skipPct}%)</span>
-                </div>
-              </div>
-
-              <div className="py-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-slate-300 shrink-0" />
-                  <span className="font-bold text-slate-600 truncate">รอสแกน QR Code</span>
-                </div>
-                <div className="text-right tabular-nums shrink-0">
-                  <span className="font-bold text-slate-700 text-sm">{missingCount} คน</span>
-                  <span className="text-slate-400 ml-1.5">({missingPct}%)</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[27rem] lg:h-[28rem] flex flex-col">
+        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[27rem] lg:h-[37rem] flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-800 text-lg">พนักงานที่ยังไม่เช็คอิน</h3>
             <span className="text-rose-600 text-xs font-bold tabular-nums">
@@ -519,7 +425,7 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 min-h-[27rem] lg:h-[28rem]">
+        <div className="col-span-12 lg:col-span-4 min-h-[27rem] lg:h-[37rem]">
           <Leaderboard checkIns={filteredCheckIns} monthlyPointsMap={monthlyPointsMap} />
         </div>
       </div>
