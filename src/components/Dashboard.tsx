@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
 import * as XLSX from 'xlsx';
 import QRCode from 'react-qr-code';
-import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, Maximize2, Minimize2, Building2, X } from 'lucide-react';
+import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, Maximize2, Minimize2, Building2, X, Clock } from 'lucide-react';
 import { Leaderboard } from './Leaderboard';
 import { MorningMeeting3DCard } from './MorningMeeting3DCard';
 import {
@@ -68,6 +68,30 @@ export function Dashboard() {
   const activeQrDept: Department = scopedDept || qrDept || departments[0] || 'IE';
   const activeQrTimeRange = deptTimeRanges[activeQrDept] || defaultTimeRange;
 
+  const isCheckInOpenForRange = (timeRange: string, now: Date = currentTime) => {
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+    const timeVal = hours + minutes / 60;
+
+    let limitTimeVal = 9.0; // Default fallback
+    const timeParts = (timeRange || '07:30-07:45').split('-');
+    if (timeParts.length > 1) {
+      const endTimeStr = timeParts[1].trim();
+      const endParts = endTimeStr.split(':');
+      if (endParts.length >= 2) {
+        const limitHours = parseInt(endParts[0], 10);
+        const limitMinutes = parseInt(endParts[1], 10);
+        if (!isNaN(limitHours) && !isNaN(limitMinutes)) {
+          limitTimeVal = limitHours + limitMinutes / 60;
+        }
+      }
+    }
+
+    return timeVal <= limitTimeVal;
+  };
+
+  const isQrCheckInOpen = isCheckInOpenForRange(activeQrTimeRange, currentTime);
+
   useEffect(() => {
     const unsubSettings = onSnapshot(doc(db, 'settings', 'checkin'), (docSnap) => {
       if (docSnap.exists()) {
@@ -99,12 +123,22 @@ export function Dashboard() {
       return url.toString();
     };
 
-    setQrUrl(buildQrUrl());
+    const updateQrState = (now: Date) => {
+      if (isCheckInOpenForRange(activeQrTimeRange, now)) {
+        setQrUrl(buildQrUrl());
+      } else {
+        setQrUrl('');
+      }
+    };
+
+    updateQrState(new Date());
 
     const timer = setInterval(() => {
       const now = new Date();
       setCurrentTime(now);
-      if (now.getSeconds() % 10 === 0) {
+      if (!isCheckInOpenForRange(activeQrTimeRange, now)) {
+        setQrUrl('');
+      } else if (now.getSeconds() % 10 === 0) {
         setQrUrl(buildQrUrl());
       }
     }, 1000);
@@ -489,18 +523,32 @@ export function Dashboard() {
             )}
 
             <div className="p-6 sm:p-8 bg-slate-50 flex flex-col items-center">
-              <div className="w-[min(76vw,420px)] h-[min(76vw,420px)] bg-white rounded-3xl p-6 border-4 border-blue-500 shadow-xl flex items-center justify-center">
-                {qrUrl && <QRCode value={qrUrl} size={380} className="w-full h-full text-slate-900" />}
-              </div>
+              {isQrCheckInOpen ? (
+                <>
+                  <div className="w-[min(76vw,420px)] h-[min(76vw,420px)] bg-white rounded-3xl p-6 border-4 border-blue-500 shadow-xl flex items-center justify-center">
+                    {qrUrl && <QRCode value={qrUrl} size={380} className="w-full h-full text-slate-900" />}
+                  </div>
 
-              <div className="mt-5 text-center">
-                <p className="text-base font-bold text-slate-800">
-                  นำกล้องโทรศัพท์สแกน QR Code เพื่อเช็คอินแผนก <span className="text-blue-600">{activeQrDept}</span>
-                </p>
-                <p className="text-xs text-slate-500 mt-1">
-                  ระบบรีเฟรชรหัสความปลอดภัยอัตโนมัติทุก 10 วินาที
-                </p>
-              </div>
+                  <div className="mt-5 text-center">
+                    <p className="text-base font-bold text-slate-800">
+                      นำกล้องโทรศัพท์สแกน QR Code เพื่อเช็คอินแผนก <span className="text-blue-600">{activeQrDept}</span>
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      ระบบรีเฟรชรหัสความปลอดภัยอัตโนมัติทุก 10 วินาที
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <div className="w-20 h-20 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-4">
+                    <Clock className="w-10 h-10" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {activeQrDept})</h3>
+                  <p className="text-slate-500 mt-2 max-w-xs">
+                    เลยกำหนดเวลาเข้าประชุมของแผนก {activeQrDept} ({activeQrTimeRange} น.) หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ
+                  </p>
+                </div>
+              )}
 
               <button
                 type="button"
@@ -508,7 +556,7 @@ export function Dashboard() {
                 className="mt-6 inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-sm transition-colors"
               >
                 <Minimize2 className="w-4 h-4 text-blue-400" />
-                <span>ย่อขนาด QR Code</span>
+                <span>{isQrCheckInOpen ? 'ย่อขนาด QR Code' : 'ปิดหน้าต่าง'}</span>
               </button>
             </div>
           </div>
