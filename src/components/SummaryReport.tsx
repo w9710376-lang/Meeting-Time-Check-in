@@ -5,7 +5,7 @@ import { CheckIn, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, parseISO } from 'date-fns';
 import { th } from 'date-fns/locale';
-import { Calendar, Download, BarChart2, CheckCircle2, Clock, CalendarDays, CalendarX, ChevronLeft, ChevronRight, UserX, Users, Search, X, Timer } from 'lucide-react';
+import { Calendar, Download, BarChart2, CheckCircle2, Clock, CalendarDays, CalendarX, ChevronLeft, ChevronRight, UserX, Users, Search, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 import { getPeriodCalendarBreakdown, isWorkingDay } from '../lib/thaiHolidays';
@@ -71,18 +71,6 @@ function getCheckInDelayMinutes(
     return Math.max(1, Math.round(rawDiff));
   }
   return c.status === 'late' ? 1 : 0;
-}
-
-function formatDelayMinutes(mins: number): string {
-  if (!mins || mins <= 0) return '-';
-  const rounded = Math.round(mins * 10) / 10;
-  const numStr = Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
-  if (rounded >= 60) {
-    const h = Math.floor(rounded / 60);
-    const m = Math.round(rounded % 60);
-    return m > 0 ? `${numStr} นาที (${h} ชม. ${m} น.)` : `${numStr} นาที (${h} ชม.)`;
-  }
-  return `${numStr} นาที`;
 }
 
 export function SummaryReport() {
@@ -370,7 +358,7 @@ export function SummaryReport() {
         return timeLabel ? `${dLabel} (${timeLabel} น.)` : dLabel;
       });
 
-      const lateDetails = lateCheckInsWithDelay.map(({ checkIn: c, delayMins }) => {
+      const lateDetails = lateCheckInsWithDelay.map(({ checkIn: c }) => {
         let dLabel = c.dateStr;
         try {
           dLabel = format(parseISO(c.dateStr), 'd MMM', { locale: th });
@@ -378,10 +366,7 @@ export function SummaryReport() {
           // fallback
         }
         const timeLabel = c.timestamp ? format(new Date(c.timestamp), 'HH:mm') : '';
-        const effectiveDelay = Math.max(1, delayMins);
-        return timeLabel
-          ? `${dLabel} (${timeLabel} น. · ช้า +${effectiveDelay} นาที)`
-          : `${dLabel} (ช้า +${effectiveDelay} นาที)`;
+        return timeLabel ? `${dLabel} (${timeLabel} น.)` : dLabel;
       });
 
       const skipReasonDetails = skipCheckIns.map(c => {
@@ -471,12 +456,7 @@ export function SummaryReport() {
     () =>
       baseReportData
         .filter(r => r.late > 0)
-        .sort(
-          (a, b) =>
-            b.avgDelayMinutes - a.avgDelayMinutes ||
-            b.late - a.late ||
-            a.name.localeCompare(b.name, 'th')
-        ),
+        .sort((a, b) => b.late - a.late || a.name.localeCompare(b.name, 'th')),
     [baseReportData]
   );
 
@@ -499,35 +479,6 @@ export function SummaryReport() {
   // Aggregate for Overview & Charts
   const totalOnTime = baseReportData.reduce((acc, curr) => acc + curr.onTime, 0);
   const totalLate = baseReportData.reduce((acc, curr) => acc + curr.late, 0);
-  const totalDelayMinutesAll = baseReportData.reduce(
-    (acc, curr) => acc + curr.totalDelayMinutes,
-    0
-  );
-  const overallAvgDelayMinutes =
-    totalLate > 0 ? Math.round((totalDelayMinutesAll / totalLate) * 10) / 10 : 0;
-  const maxDelayRecord = useMemo(() => {
-    if (lateEmployees.length === 0) return null;
-    return lateEmployees.reduce((maxEmp, curr) =>
-      curr.maxDelayMinutes > maxEmp.maxDelayMinutes ? curr : maxEmp
-    );
-  }, [lateEmployees]);
-
-  const activeTimeRangeSummary = useMemo(() => {
-    if (selectedDept !== 'ALL') {
-      const deptKey = selectedDept.trim().toUpperCase();
-      return deptTimeRanges[deptKey] || deptTimeRanges[selectedDept] || defaultTimeRange || '07:30-07:45';
-    }
-    const uniqueRanges = new Set<string>();
-    departments.forEach(d => {
-      const r = deptTimeRanges[d] || defaultTimeRange || '07:30-07:45';
-      uniqueRanges.add(`${d}: ${r}`);
-    });
-    if (uniqueRanges.size <= 1) {
-      return defaultTimeRange || '07:30-07:45';
-    }
-    return Array.from(uniqueRanges).join(' · ');
-  }, [selectedDept, deptTimeRanges, defaultTimeRange, departments]);
-
   const totalMissing = baseReportData.reduce((acc, curr) => acc + curr.missingDays, 0);
   const totalSkipMeeting = baseReportData.reduce((acc, curr) => acc + curr.skipMeeting, 0);
   const chartData: { name: string; value: number; fill: string; category: OverviewCategory }[] = [
@@ -556,8 +507,6 @@ export function SummaryReport() {
         'วันที่ไม่สแกน (เฉพาะวันทำการ)': data.missedShortLabels.length > 0 ? data.missedShortLabels.join(', ') : 'สแกนครบทุกวันทำการ',
         'ตรงเวลา (วัน)': data.onTime,
         'มาสาย (วัน)': data.late,
-        'เวลาสายเฉลี่ย (นาที/ครั้ง)': data.late > 0 ? data.avgDelayMinutes : 0,
-        'เวลาสายรวม (นาที)': data.totalDelayMinutes,
         'รายละเอียดวันที่มาสาย': data.lateDetails.length > 0 ? data.lateDetails.join(' | ') : '-',
         'เข้าร่วมประชุม (วัน)': data.joinMeeting,
         'ไม่เข้าร่วมประชุม (วัน)': data.skipMeeting,
@@ -621,7 +570,7 @@ export function SummaryReport() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-900">สรุปรายสัปดาห์และรายเดือน</h1>
-          <p className="text-sm text-slate-500">ตรวจสอบสถิติการเข้างาน การเข้าร่วมประชุม ค่าเฉลี่ยเวลามาสาย และรายชื่อคนที่ไม่สแกนในแต่ละวัน</p>
+          <p className="text-sm text-slate-500">ตรวจสอบสถิติการเข้างาน การเข้าร่วมประชุม และรายชื่อคนที่ไม่สแกนในแต่ละวัน</p>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {!scopedDept && (
               <button
@@ -773,7 +722,7 @@ export function SummaryReport() {
                       <Clock className="w-4 h-4 mr-2 text-amber-500 shrink-0" /> เช็คอินสาย
                     </div>
                     <p className="text-xs text-slate-500 pl-6 mt-0.5 tabular-nums">
-                      พนักงาน {lateEmployees.length} คน · เฉลี่ยช้า {overallAvgDelayMinutes > 0 ? formatDelayMinutes(overallAvgDelayMinutes) : '0 นาที'} · <span className="text-amber-600 font-semibold group-hover:underline">กดดูรายชื่อ</span>
+                      พนักงาน {lateEmployees.length} คน · <span className="text-amber-600 font-semibold group-hover:underline">กดดูรายชื่อ</span>
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -848,78 +797,6 @@ export function SummaryReport() {
                     />
                   </BarChart>
                 </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          {/* สรุปค่าเฉลี่ยความล่าช้าของพนักงานที่เช็คอินหลังเวลาที่กำหนด (Average Delay Summary) */}
-          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h3 className="font-bold text-slate-800 text-base sm:text-lg flex items-center">
-                  <Timer className="w-5 h-5 mr-2 text-amber-500 shrink-0" />
-                  สถิติค่าเฉลี่ยความล่าช้าหลังช่วงเวลาที่กำหนด ({selectedDept === 'ALL' ? 'ทุกแผนก' : `แผนก ${selectedDept}`})
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
-                  คำนวณเฉพาะพนักงานที่เช็คอินหลังสิ้นสุดช่วงเวลาที่กำหนดของแผนก · ช่วงเวลาที่กำหนด: <strong className="text-slate-700">{activeTimeRangeSummary}</strong>
-                </p>
-              </div>
-              {lateEmployees.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => handleOpenOverviewModal('late')}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
-                >
-                  ดูรายละเอียดคนมาสาย ({lateEmployees.length} คน)
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200/80">
-                <p className="text-xs font-semibold text-amber-800">เวลาสายเฉลี่ยต่อครั้ง</p>
-                <p className="text-2xl font-bold text-amber-600 tabular-nums mt-1">
-                  {overallAvgDelayMinutes > 0 ? formatDelayMinutes(overallAvgDelayMinutes) : '0 นาที'}
-                </p>
-                <p className="text-xs text-slate-500 mt-1 tabular-nums">
-                  {totalLate > 0
-                    ? `คำนวณจากเช็คอินสายทั้งหมด ${totalLate} ครั้ง`
-                    : 'ไม่มีรายการเช็คอินหลังเวลาที่กำหนด'}
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <p className="text-xs font-semibold text-slate-600">จำนวนพนักงานที่เช็คอินสาย</p>
-                <p className="text-2xl font-bold text-slate-800 tabular-nums mt-1">
-                  {lateEmployees.length} <span className="text-sm font-semibold text-slate-500">/ {baseReportData.length} คน</span>
-                </p>
-                <p className="text-xs text-slate-500 mt-1 tabular-nums">
-                  เวลารวมที่สายทั้งหมด {totalDelayMinutesAll} นาที
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <p className="text-xs font-semibold text-slate-600">สถิติมาสายสูงสุดต่อครั้ง</p>
-                <p className="text-2xl font-bold text-slate-800 tabular-nums mt-1">
-                  {maxDelayRecord ? formatDelayMinutes(maxDelayRecord.maxDelayMinutes) : '-'}
-                </p>
-                <p className="text-xs text-slate-500 mt-1 truncate">
-                  {maxDelayRecord
-                    ? `${maxDelayRecord.name} (แผนก ${maxDelayRecord.department})`
-                    : 'ทุกคนเช็คอินทันเวลาที่กำหนด'}
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <p className="text-xs font-semibold text-slate-600">ค่าเฉลี่ยรายบุคคลสูงสุด</p>
-                <p className="text-2xl font-bold text-slate-800 tabular-nums mt-1">
-                  {lateEmployees.length > 0 ? formatDelayMinutes(lateEmployees[0].avgDelayMinutes) : '-'}
-                </p>
-                <p className="text-xs text-slate-500 mt-1 truncate">
-                  {lateEmployees.length > 0
-                    ? `${lateEmployees[0].name} · สาย ${lateEmployees[0].late} ครั้ง`
-                    : 'ไม่มีประวัติการเช็คอินล่าช้า'}
-                </p>
               </div>
             </div>
           </div>
@@ -1044,7 +921,6 @@ export function SummaryReport() {
                     <th className="py-4 px-4">วันที่ไม่สแกน (เฉพาะวันทำการ)</th>
                     <th className="py-4 px-4 text-center text-emerald-600">ตรงเวลา</th>
                     <th className="py-4 px-4 text-center text-amber-600">สาย</th>
-                    <th className="py-4 px-4 text-center text-amber-700">เวลาสายเฉลี่ย</th>
                     <th className="py-4 px-4 text-center text-blue-600">ประชุม (เข้า)</th>
                     <th className="py-4 px-4 text-center text-rose-600">ประชุม (ไม่เข้า)</th>
                   </tr>
@@ -1081,23 +957,6 @@ export function SummaryReport() {
                         </td>
                         <td className="py-3 px-4 text-center font-semibold text-emerald-600 tabular-nums">{data.onTime > 0 ? data.onTime : '-'}</td>
                         <td className="py-3 px-4 text-center font-semibold text-amber-600 tabular-nums">{data.late > 0 ? data.late : '-'}</td>
-                        <td className="py-3 px-4 text-center tabular-nums whitespace-nowrap">
-                          {data.late > 0 ? (
-                            <div
-                              className="flex flex-col items-center"
-                              title={data.lateDetails.join(' · ')}
-                            >
-                              <span className="font-bold text-amber-600">
-                                {formatDelayMinutes(data.avgDelayMinutes)}
-                              </span>
-                              <span className="text-[11px] text-slate-500">
-                                รวม {data.totalDelayMinutes} นาที (เกณฑ์ {data.designatedTimeRange})
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-slate-400 font-medium">-</span>
-                          )}
-                        </td>
                         <td className="py-3 px-4 text-center font-semibold text-blue-600 tabular-nums">{data.joinMeeting > 0 ? data.joinMeeting : '-'}</td>
                         <td className="py-3 px-4 text-center font-semibold text-rose-600 tabular-nums">
                           {data.skipMeeting > 0 ? (
@@ -1120,7 +979,7 @@ export function SummaryReport() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={13} className="py-8 text-center text-slate-500">
+                      <td colSpan={12} className="py-8 text-center text-slate-500">
                         ไม่มีข้อมูลพนักงานในแผนกที่เลือก
                       </td>
                     </tr>
@@ -1298,14 +1157,6 @@ export function SummaryReport() {
                         {periodLabel} · {selectedDept === 'ALL' ? 'ทุกแผนก' : `แผนก ${selectedDept}`} · พนักงาน{' '}
                         <strong className="text-white">{categoryMeta.employees.length} คน</strong> · รวมทั้งหมด{' '}
                         <strong className="text-white">{categoryMeta.totalOccurrences} {categoryMeta.unit}</strong>
-                        {activeOverviewCategory === 'late' && overallAvgDelayMinutes > 0 && (
-                          <>
-                            {' '}· เวลาสายเฉลี่ยรวม{' '}
-                            <strong className="text-amber-400">
-                              {formatDelayMinutes(overallAvgDelayMinutes)}
-                            </strong>
-                          </>
-                        )}
                       </p>
                     </div>
                     <button
@@ -1436,11 +1287,6 @@ export function SummaryReport() {
                               <span className={`text-base font-bold ${categoryMeta.accentText}`}>
                                 {count} {categoryMeta.unit}
                               </span>
-                              {activeOverviewCategory === 'late' && emp.avgDelayMinutes > 0 && (
-                                <p className="text-xs font-semibold text-amber-700 mt-0.5">
-                                  เฉลี่ย {formatDelayMinutes(emp.avgDelayMinutes)} · รวม {emp.totalDelayMinutes} นาที
-                                </p>
-                              )}
                             </div>
                           </div>
                         );

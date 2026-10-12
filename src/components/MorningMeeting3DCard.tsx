@@ -323,39 +323,97 @@ export function MorningMeeting3DCard({
     .sort((a, b) => a.timestamp - b.timestamp);
 
   // Amphitheater seats configuration (outer tier + inner tier) with fill priority
-  const amphitheaterAvatars = [
-    // Top / Back curved amphitheater tier (5 seats)
-    { x: 96, y: 78, scale: 0.72, skin: '#FED7AA', hair: '#1E293B', shirt: '#10B981', facing: 'right' as const, priority: 9 },
+  const baseAmphitheaterAvatars = [
+    // Top / Back curved amphitheater tier (priorities 1, 3, 4, 9, 10)
+    { x: 96, y: 78, scale: 0.72, skin: '#FED7AA', hair: '#1E293B', shirt: '#10B981', facing: 'right' as const, hasGlasses: false, priority: 9 },
     { x: 116, y: 69, scale: 0.72, skin: '#FDE68A', hair: '#78350F', shirt: '#34D399', facing: 'center' as const, hasGlasses: true, priority: 3 },
-    { x: 140, y: 65, scale: 0.74, skin: '#FDBA74', hair: '#334155', shirt: '#059669', facing: 'center' as const, priority: 1 },
-    { x: 164, y: 69, scale: 0.72, skin: '#FED7AA', hair: '#475569', shirt: '#10B981', facing: 'center' as const, priority: 4 },
+    { x: 140, y: 65, scale: 0.74, skin: '#FDBA74', hair: '#334155', shirt: '#059669', facing: 'center' as const, hasGlasses: false, priority: 1 },
+    { x: 164, y: 69, scale: 0.72, skin: '#FED7AA', hair: '#475569', shirt: '#10B981', facing: 'center' as const, hasGlasses: false, priority: 4 },
     { x: 184, y: 78, scale: 0.72, skin: '#FDBA74', hair: '#1E293B', shirt: '#0D9488', facing: 'left' as const, hasGlasses: true, priority: 10 },
 
-    // Middle curved amphitheater tier (left & right wings)
-    { x: 82, y: 102, scale: 0.78, skin: '#FDE68A', hair: '#334155', shirt: '#10B981', facing: 'right' as const, priority: 13 },
-    { x: 102, y: 95, scale: 0.76, skin: '#FDBA74', hair: '#7C2D12', shirt: '#34D399', facing: 'right' as const, priority: 7 },
-    { x: 178, y: 95, scale: 0.76, skin: '#FED7AA', hair: '#1E293B', shirt: '#059669', facing: 'left' as const, priority: 8 },
-    { x: 198, y: 102, scale: 0.78, skin: '#FDE68A', hair: '#475569', shirt: '#10B981', facing: 'left' as const, priority: 14 },
+    // Upper-Middle curved amphitheater tier (priorities 7, 8, 13, 14)
+    { x: 82, y: 102, scale: 0.76, skin: '#FDE68A', hair: '#334155', shirt: '#10B981', facing: 'right' as const, hasGlasses: false, priority: 13 },
+    { x: 102, y: 95, scale: 0.75, skin: '#FDBA74', hair: '#7C2D12', shirt: '#34D399', facing: 'right' as const, hasGlasses: false, priority: 7 },
+    { x: 178, y: 95, scale: 0.75, skin: '#FED7AA', hair: '#1E293B', shirt: '#059669', facing: 'left' as const, hasGlasses: false, priority: 8 },
+    { x: 198, y: 102, scale: 0.76, skin: '#FDE68A', hair: '#475569', shirt: '#10B981', facing: 'left' as const, hasGlasses: false, priority: 14 },
 
-    // Front curved amphitheater tier (foreground rows attending the stage)
-    { x: 88, y: 176, scale: 0.84, skin: '#FDBA74', hair: '#1E293B', shirt: '#059669', facing: 'right' as const, priority: 11 },
-    { x: 112, y: 188, scale: 0.86, skin: '#FED7AA', hair: '#78350F', shirt: '#10B981', facing: 'center' as const, hasGlasses: true, priority: 5 },
-    { x: 140, y: 192, scale: 0.88, skin: '#FDE68A', hair: '#334155', shirt: '#34D399', facing: 'center' as const, priority: 2 },
-    { x: 168, y: 188, scale: 0.86, skin: '#FDBA74', hair: '#475569', shirt: '#0D9488', facing: 'center' as const, priority: 6 },
-    { x: 192, y: 176, scale: 0.84, skin: '#FED7AA', hair: '#1E293B', shirt: '#10B981', facing: 'left' as const, priority: 12 },
+    // Front curved amphitheater tier (priorities 2, 5, 6, 11, 12)
+    { x: 88, y: 176, scale: 0.82, skin: '#FDBA74', hair: '#1E293B', shirt: '#059669', facing: 'right' as const, hasGlasses: false, priority: 11 },
+    { x: 112, y: 188, scale: 0.84, skin: '#FED7AA', hair: '#78350F', shirt: '#10B981', facing: 'center' as const, hasGlasses: true, priority: 5 },
+    { x: 140, y: 192, scale: 0.86, skin: '#FDE68A', hair: '#334155', shirt: '#34D399', facing: 'center' as const, hasGlasses: false, priority: 2 },
+    { x: 168, y: 188, scale: 0.84, skin: '#FDBA74', hair: '#475569', shirt: '#0D9488', facing: 'center' as const, hasGlasses: false, priority: 6 },
+    { x: 192, y: 176, scale: 0.82, skin: '#FED7AA', hair: '#1E293B', shirt: '#10B981', facing: 'left' as const, hasGlasses: false, priority: 12 },
+
+    // Extended Mid-Wing & Outer/Inner Tier Seats (priorities 15..30)
+    { x: 76, y: 126, scale: 0.76, skin: '#FED7AA', hair: '#334155', shirt: '#059669', facing: 'right' as const, hasGlasses: false, priority: 15 },
+    { x: 204, y: 126, scale: 0.76, skin: '#FDBA74', hair: '#1E293B', shirt: '#34D399', facing: 'left' as const, hasGlasses: true, priority: 16 },
+    { x: 78, y: 152, scale: 0.78, skin: '#FDE68A', hair: '#78350F', shirt: '#10B981', facing: 'right' as const, hasGlasses: false, priority: 17 },
+    { x: 202, y: 152, scale: 0.78, skin: '#FED7AA', hair: '#475569', shirt: '#0D9488', facing: 'left' as const, hasGlasses: false, priority: 18 },
+    { x: 92, y: 118, scale: 0.74, skin: '#FDBA74', hair: '#1E293B', shirt: '#10B981', facing: 'right' as const, hasGlasses: false, priority: 19 },
+    { x: 188, y: 118, scale: 0.74, skin: '#FDE68A', hair: '#7C2D12', shirt: '#059669', facing: 'left' as const, hasGlasses: false, priority: 20 },
+    { x: 92, y: 158, scale: 0.78, skin: '#FED7AA', hair: '#334155', shirt: '#34D399', facing: 'right' as const, hasGlasses: true, priority: 21 },
+    { x: 188, y: 158, scale: 0.78, skin: '#FDBA74', hair: '#475569', shirt: '#10B981', facing: 'left' as const, hasGlasses: false, priority: 22 },
+    { x: 126, y: 80, scale: 0.70, skin: '#FDE68A', hair: '#1E293B', shirt: '#0D9488', facing: 'center' as const, hasGlasses: false, priority: 23 },
+    { x: 154, y: 80, scale: 0.70, skin: '#FED7AA', hair: '#78350F', shirt: '#34D399', facing: 'center' as const, hasGlasses: false, priority: 24 },
+    { x: 126, y: 178, scale: 0.80, skin: '#FDBA74', hair: '#334155', shirt: '#059669', facing: 'center' as const, hasGlasses: false, priority: 25 },
+    { x: 154, y: 178, scale: 0.80, skin: '#FDE68A', hair: '#1E293B', shirt: '#10B981', facing: 'center' as const, hasGlasses: true, priority: 26 },
+    { x: 104, y: 200, scale: 0.82, skin: '#FED7AA', hair: '#475569', shirt: '#34D399', facing: 'center' as const, hasGlasses: false, priority: 27 },
+    { x: 176, y: 200, scale: 0.82, skin: '#FDBA74', hair: '#7C2D12', shirt: '#059669', facing: 'center' as const, hasGlasses: false, priority: 28 },
+    { x: 106, y: 60, scale: 0.68, skin: '#FDE68A', hair: '#334155', shirt: '#10B981', facing: 'center' as const, hasGlasses: false, priority: 29 },
+    { x: 174, y: 60, scale: 0.68, skin: '#FED7AA', hair: '#1E293B', shirt: '#0D9488', facing: 'center' as const, hasGlasses: false, priority: 30 },
   ];
 
-  // Show 0 avatars when nobody has joined the meeting yet; show seated avatars only when meetingJoinedCount > 0
-  const visibleSeatCount =
-    meetingJoinedCount <= 0
-      ? 0
-      : Math.min(
-          amphitheaterAvatars.length,
-          Math.max(
-            meetingJoinedCount,
-            Math.round((joinPct / 100) * amphitheaterAvatars.length)
-          )
-        );
+  // Exact 1:1 count of 3D avatars with the number of employees who joined the morning meeting
+  const visibleSeatCount = Math.max(0, meetingJoinedCount);
+  const totalSeatTarget =
+    totalEmployeesCount > 0 || visibleSeatCount > 0
+      ? Math.max(totalEmployeesCount, visibleSeatCount)
+      : 14;
+
+  const skinPalette = ['#FED7AA', '#FDE68A', '#FDBA74'];
+  const hairPalette = ['#1E293B', '#334155', '#475569', '#78350F', '#7C2D12'];
+  const shirtPalette = ['#10B981', '#34D399', '#059669', '#0D9488'];
+
+  // Dynamically expand amphitheater seats if total employees or attendees exceed 30
+  const amphitheaterAvatars = (() => {
+    const seats = [...baseAmphitheaterAvatars];
+    if (totalSeatTarget > seats.length) {
+      const extraNeeded = totalSeatTarget - seats.length;
+      const rings = [
+        { rx: 66, ry: 57, cy: 136, baseScale: 0.70 },
+        { rx: 76, ry: 67, cy: 135, baseScale: 0.66 },
+        { rx: 55, ry: 47, cy: 137, baseScale: 0.72 },
+      ];
+      for (let i = 0; i < extraNeeded; i++) {
+        const priority = seats.length + 1;
+        const ring = rings[i % rings.length];
+        const angleStep = (2 * Math.PI) / Math.max(12, extraNeeded);
+        const angle = -Math.PI * 0.82 + i * angleStep;
+        const x = Math.round(140 + ring.rx * Math.cos(angle));
+        const y = Math.round(ring.cy + ring.ry * Math.sin(angle));
+        const facing: 'left' | 'center' | 'right' =
+          x < 122 ? 'right' : x > 158 ? 'left' : 'center';
+        seats.push({
+          x,
+          y,
+          scale: ring.baseScale,
+          skin: skinPalette[i % skinPalette.length],
+          hair: hairPalette[i % hairPalette.length],
+          shirt: shirtPalette[i % shirtPalette.length],
+          facing,
+          hasGlasses: i % 4 === 0,
+          priority,
+        });
+      }
+    }
+
+    const crowdScale =
+      totalSeatTarget > 28 ? 0.84 : totalSeatTarget > 18 ? 0.92 : 1;
+
+    return seats
+      .filter((s) => s.priority <= totalSeatTarget)
+      .map((s) => ({ ...s, scale: Number((s.scale * crowdScale).toFixed(3)) }));
+  })();
 
   return (
     <>
@@ -615,24 +673,24 @@ export function MorningMeeting3DCard({
                 />
 
                 {/* Empty Amphitheater Seat Cushions (shown on unoccupied seats) */}
-                {amphitheaterAvatars.map((av, idx) => {
-                  const isSeatedAttending = av.priority <= visibleSeatCount;
-                  if (isSeatedAttending) return null;
-                  return (
-                    <g key={`seat-${idx}`} transform={`translate(${av.x}, ${av.y + 8}) scale(${av.scale})`}>
+                {amphitheaterAvatars
+                  .filter((av) => av.priority > visibleSeatCount)
+                  .sort((a, b) => a.y - b.y)
+                  .map((av) => (
+                    <g key={`seat-${av.priority}`} transform={`translate(${av.x}, ${av.y + 8}) scale(${av.scale})`}>
                       <ellipse cx="0" cy="1.5" rx="7.5" ry="3.2" fill="#CBD5E1" opacity="0.65" />
                       <ellipse cx="0" cy="0" rx="7.5" ry="3.2" fill="#F1F5F9" stroke="#E2E8F0" strokeWidth="0.8" />
                     </g>
-                  );
-                })}
+                  ))}
 
-                {/* Tiny 3D Avatar Characters Sitting & Attending the Morning Meeting (only shown when meetingJoinedCount > 0) */}
+                {/* Back & Mid-Tier 3D Avatar Characters Sitting & Attending (y <= 150) */}
                 {visibleSeatCount > 0 &&
                   amphitheaterAvatars
-                    .filter((av) => av.priority <= visibleSeatCount)
-                    .map((av, idx) => (
+                    .filter((av) => av.priority <= visibleSeatCount && av.y <= 150)
+                    .sort((a, b) => a.y - b.y)
+                    .map((av) => (
                       <ClayAvatarBust
-                        key={`avatar-${idx}`}
+                        key={`avatar-${av.priority}`}
                         x={av.x}
                         y={av.y}
                         scale={av.scale}
@@ -670,12 +728,12 @@ export function MorningMeeting3DCard({
                 <g filter="url(#clay3DTextShadow)">
                   <text
                     x="140"
-                    y="138"
+                    y="136"
                     textAnchor="middle"
                     dominantBaseline="central"
                     className="font-black tabular-nums"
                     fill="#0F172A"
-                    fontSize="30"
+                    fontSize="29"
                     fontWeight="900"
                     letterSpacing="-1"
                   >
@@ -684,15 +742,34 @@ export function MorningMeeting3DCard({
                 </g>
                 <text
                   x="140"
-                  y="156"
+                  y="155"
                   textAnchor="middle"
                   fill="#059669"
-                  fontSize="8.5"
+                  fontSize="8"
                   fontWeight="800"
-                  letterSpacing="0.6"
+                  letterSpacing="0.4"
                 >
-                  ATTENDED
+                  ATTENDED · {meetingJoinedCount}
                 </text>
+
+                {/* Foreground Tier 3D Avatar Characters Sitting & Attending (y > 150) */}
+                {visibleSeatCount > 0 &&
+                  amphitheaterAvatars
+                    .filter((av) => av.priority <= visibleSeatCount && av.y > 150)
+                    .sort((a, b) => a.y - b.y)
+                    .map((av) => (
+                      <ClayAvatarBust
+                        key={`avatar-${av.priority}`}
+                        x={av.x}
+                        y={av.y}
+                        scale={av.scale}
+                        skin={av.skin}
+                        hair={av.hair}
+                        shirt={av.shirt}
+                        facing={av.facing}
+                        hasGlasses={av.hasGlasses}
+                      />
+                    ))}
               </g>
             </svg>
           </div>
