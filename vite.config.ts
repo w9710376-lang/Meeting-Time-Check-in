@@ -117,10 +117,22 @@ function fastCheckinCachePlugin(): Plugin {
                 memoryCache.employees = incoming.employees;
               }
               if (typeof incoming.todayDateStr === 'string' && incoming.todayDateStr) {
+                if (memoryCache.todayDateStr && memoryCache.todayDateStr !== incoming.todayDateStr) {
+                  memoryCache.todayCheckIns = [];
+                }
                 memoryCache.todayDateStr = incoming.todayDateStr;
               }
               if (Array.isArray(incoming.todayCheckIns)) {
-                memoryCache.todayCheckIns = incoming.todayCheckIns;
+                const byId = new Map<string, any>();
+                if (Array.isArray(memoryCache.todayCheckIns)) {
+                  for (const item of memoryCache.todayCheckIns) {
+                    if (item && item.id) byId.set(item.id, item);
+                  }
+                }
+                for (const item of incoming.todayCheckIns) {
+                  if (item && item.id) byId.set(item.id, item);
+                }
+                memoryCache.todayCheckIns = Array.from(byId.values());
               }
               if (typeof incoming.defaultTimeRange === 'string' && incoming.defaultTimeRange) {
                 memoryCache.defaultTimeRange = incoming.defaultTimeRange;

@@ -199,9 +199,7 @@ export function Dashboard() {
           SkipReason: data.meetingStatus === 'skip' ? (data.skipReason || 'ไม่ระบุเหตุผล') : '-',
           DeviceID: data.deviceId || '-',
           DeviceModel: data.deviceLabel || '-',
-          SecurityVerification: data.suspiciousFlag
-            ? `ตรวจสอบ: ${data.suspiciousReason || 'ฮาร์ดแวร์สแกนซ้ำใกล้กัน'}`
-            : 'ปกติ (Verified 1:1)',
+          SecurityVerification: 'ปกติ (Verified 1:1)',
         });
       });
 

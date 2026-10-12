@@ -36,6 +36,25 @@ function simpleHash(input: string): string {
   return combined.toString(36).toUpperCase().padStart(8, '0').slice(0, 8);
 }
 
+function generateCryptoRandomBlock(length: number): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // unambiguous uppercase alphanumeric
+  try {
+    const array = new Uint32Array(length);
+    window.crypto.getRandomValues(array);
+    let out = '';
+    for (let i = 0; i < length; i++) {
+      out += chars[array[i] % chars.length];
+    }
+    return out;
+  } catch {
+    let out = '';
+    for (let i = 0; i < length; i++) {
+      out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
+  }
+}
+
 /**
  * Retrieves or generates a persistent Device ID stored across localStorage, sessionStorage, cookies, and window.name.
  */
@@ -71,12 +90,7 @@ export function getOrCreateDeviceId(): string {
   }
 
   if (!existingId || existingId.length < 8) {
-    const randomPart =
-      Math.random().toString(36).substring(2, 6).toUpperCase() +
-      '-' +
-      Math.random().toString(36).substring(2, 6).toUpperCase();
-    const hwPart = getHardwareSignature().replace('HW-', '').slice(0, 4);
-    existingId = `DEV-${hwPart}-${randomPart}`;
+    existingId = `DEV-${generateCryptoRandomBlock(4)}-${generateCryptoRandomBlock(4)}`;
   }
 
   // Persist across all available client stores
@@ -183,10 +197,10 @@ export function getDeviceModelLabel(): string {
 }
 
 /**
- * Formats a short readable Device ID badge (e.g. DEV-A1B2-9F3C -> DEV-A1B2..9F3C or last 8 chars)
+ * Formats a readable Device ID badge without truncating the unique suffix
  */
 export function getShortDeviceCode(deviceId?: string | null): string {
   if (!deviceId) return '-';
-  if (deviceId.length <= 12) return deviceId;
-  return deviceId.slice(0, 12);
+  if (deviceId.length <= 18) return deviceId;
+  return `${deviceId.slice(0, 8)}..${deviceId.slice(-4)}`;
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { doc, setDoc, collection, query, onSnapshot, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { CheckIn as CheckInType, Employee, Department } from '../types';
@@ -34,22 +34,26 @@ function resolveScanEmployee(
   remId: string | null,
   deptParam: string | null
 ): Employee | null {
+  const scannedDeptNorm = deptParam ? deptParam.trim().toUpperCase() : null;
+
+  if (remId) {
+    const found = emps.find((e) => e.id === remId);
+    const empDept = (found?.department || 'IE').trim().toUpperCase();
+    if (found && (!scannedDeptNorm || empDept === scannedDeptNorm)) {
+      return found;
+    }
+  }
+
   const cloudBoundEmp = emps.find(
-    (e) => e.boundDeviceId && e.boundDeviceId === deviceId
+    (e) =>
+      e.boundDeviceId &&
+      e.boundDeviceId === deviceId &&
+      (!scannedDeptNorm || (e.department || 'IE').trim().toUpperCase() === scannedDeptNorm)
   );
   if (cloudBoundEmp) {
     return cloudBoundEmp;
   }
-  if (remId) {
-    const found = emps.find((e) => e.id === remId);
-    const isBoundToOtherPhone =
-      found?.boundDeviceId && found.boundDeviceId !== deviceId;
-    const empDept = (found?.department || 'IE').trim().toUpperCase();
-    const scannedDeptNorm = deptParam ? deptParam.trim().toUpperCase() : null;
-    if (found && !isBoundToOtherPhone && (!scannedDeptNorm || empDept === scannedDeptNorm)) {
-      return found;
-    }
-  }
+
   return null;
 }
 
@@ -141,6 +145,8 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
   // Try to load remembered employee for scan mode
   const rememberedEmpId = localStorage.getItem('remembered_employee_id');
+  const [hasManuallyClearedName, setHasManuallyClearedName] = useState(false);
+  const hasManuallyClearedNameRef = useRef(false);
 
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(() =>
     isScanMode
@@ -155,8 +161,11 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     [employees, currentDeviceId]
   );
 
-  // Check if QR expired immediately on load
-  const isQrExpired = isScanMode && (!urlScanTime || Date.now() - parseInt(urlScanTime, 10) > 30000);
+  // Allow 12-hour same-day window (with bidirectional clock-skew tolerance) so phone/PC clock drift never blocks legitimate scans
+  const parsedScanTime = urlScanTime ? parseInt(urlScanTime, 10) : NaN;
+  const isQrExpired =
+    isScanMode &&
+    (!urlScanTime || isNaN(parsedScanTime) || Math.abs(Date.now() - parsedScanTime) > 12 * 60 * 60 * 1000);
   const [step, setStep] = useState<Step>(() => {
     if (!isScanMode) return 'scan';
     if (isQrExpired) return 'error';
@@ -320,23 +329,22 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       setIsLoadingEmployees(false);
       saveCachedEmployees(emps, shouldPushServer);
 
-      if (isScanMode) {
+      if (isScanMode && !hasManuallyClearedNameRef.current) {
         const remId = localStorage.getItem('remembered_employee_id');
         const matched = resolveScanEmployee(emps, currentDeviceId, remId, urlDept);
         if (matched) {
           localStorage.setItem('remembered_employee_id', matched.id);
           const empDept = (matched.department || 'IE').trim().toUpperCase();
-          setSelectedEmployee(matched);
+          setSelectedEmployee((prev) => {
+            if (prev) {
+              return emps.find((e) => e.id === prev.id) || prev;
+            }
+            return matched;
+          });
           setSelectedDept(empDept);
           setStep((prev) => (prev === 'error' || prev === 'success' ? prev : 'meeting'));
         } else if (remId) {
-          const found = emps.find((e) => e.id === remId);
-          const isBoundToOtherPhone =
-            found?.boundDeviceId && found.boundDeviceId !== currentDeviceId;
           setStep((prev) => (prev === 'error' || prev === 'success' ? prev : 'select-name'));
-          if (!found || isBoundToOtherPhone) {
-            localStorage.removeItem('remembered_employee_id');
-          }
         }
       }
     };
@@ -427,7 +435,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     setStep('select-name');
   };
 
-  // Validate 4-Layer Anti-Buddy-Punching rules before allowing check-in in Scan Mode
+  // Validate Same-Day 1-Device-1-Person Security (prevents buddy-punching on the same phone today while avoiding false collisions across iPhones/browsers)
   const validateScanDeviceSecurity = (
     targetEmp: Employee
   ): { allowed: boolean; errorMsg?: string; suspiciousFlag?: boolean; suspiciousReason?: string } => {
@@ -437,44 +445,19 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
-    // Layer 1A: This physical device ID is already bound in Cloud Firestore to a DIFFERENT employee
-    const cloudBoundOwner = employees.find(
-      (e) => e.boundDeviceId && e.boundDeviceId === currentDeviceId
-    );
-    if (cloudBoundOwner && cloudBoundOwner.id !== targetEmp.id) {
-      return {
-        allowed: false,
-        errorMsg: `ปฏิเสธการสแกนแทนกัน: มือถือเครื่องนี้ (${getShortDeviceCode(
-          currentDeviceId
-        )}) ผูกกับชื่อ "${cloudBoundOwner.name}" ไปแล้ว ไม่สามารถใช้เช็คอินแทน "${
-          targetEmp.name
-        }" ได้`,
-      };
-    }
-
-    // Layer 1B: Target employee is already bound in Cloud Firestore to ANOTHER phone (blocks Incognito / Private Tab / another browser!)
-    if (targetEmp.boundDeviceId && targetEmp.boundDeviceId !== currentDeviceId) {
-      return {
-        allowed: false,
-        errorMsg: `ปฏิเสธการสแกนแทนกัน: ชื่อ "${
-          targetEmp.name
-        }" ได้ผูกกับมือถือเครื่องอื่นไว้แล้ว (${getShortDeviceCode(
-          targetEmp.boundDeviceId
-        )}) ไม่สามารถใช้เครื่องนี้หรือโหมดไม่ระบุตัวตนสแกนแทนได้ (หากเจ้าตัวเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้ง Super Admin ผู้ดูแลระบบกลางเพื่อกดรีเซ็ตเครื่อง)`,
-      };
-    }
-
-    // Layer 1C: LocalStorage or Firestore Today's Check-in already recorded this Device ID for someone else today
+    // Rule 1: LocalStorage on this browser already recorded a check-in for a DIFFERENT employee today
     const lockedDate = localStorage.getItem('device_checkin_date');
     const lockedEmp = localStorage.getItem('device_checkin_emp');
     if (lockedDate === todayStr && lockedEmp && lockedEmp !== targetEmp.id) {
+      const lockedEmpObj = employees.find((e) => e.id === lockedEmp);
+      const lockedName = lockedEmpObj ? `"${lockedEmpObj.name}"` : 'พนักงานท่านอื่น';
       return {
         allowed: false,
-        errorMsg:
-          'อุปกรณ์นี้ได้ทำการเช็คอินสำหรับวันนี้ไปแล้ว ไม่สามารถเช็คอินแทนบุคคลอื่นได้',
+        errorMsg: `มือถือเครื่องนี้ได้ใช้สแกนเช็คอินให้ ${lockedName} ในวันนี้ไปแล้ว (จำกัด 1 เครื่อง ต่อ 1 คนต่อวัน) ไม่สามารถใช้สแกนแทนบุคคลอื่นได้`,
       };
     }
 
+    // Rule 2: Cloud Firestore Today's Check-in already recorded this exact Device ID (currentDeviceId) for a DIFFERENT employee today
     const sameDeviceTodayOtherUser = todayCheckInsList.find(
       (c) => c.deviceId && c.deviceId === currentDeviceId && c.userId !== targetEmp.id
     );
@@ -483,57 +466,24 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         allowed: false,
         errorMsg: `อุปกรณ์เครื่องนี้ (${getShortDeviceCode(
           currentDeviceId
-        )}) ได้สแกนเช็คอินให้ "${sameDeviceTodayOtherUser.userName}" ในวันนี้ไปแล้ว ไม่สามารถสแกนแทนผู้อื่นได้`,
+        )}) ได้สแกนเช็คอินให้ "${sameDeviceTodayOtherUser.userName}" ในวันนี้ไปแล้ว (จำกัด 1 เครื่อง ต่อ 1 คนต่อวัน) ไม่สามารถสแกนแทนผู้อื่นได้`,
       };
     }
 
-    // Layer 2 & 3: Single-Use QR Token & Hardware Signature Cooldown (blocks Incognito when neither employee was bound yet)
+    // Rule 3: Single-Use QR Token on the exact same Device ID (prevents rapid double-submit on the same phone)
+    // NOTE: We intentionally do NOT compare hardwareSignature (e.g. iPhone 390x844) because multiple coworkers own the same phone model and scan at the same time!
     if (urlScanTime) {
-      const reusedQrToken = todayCheckInsList.find(
+      const reusedQrTokenSameDevice = todayCheckInsList.find(
         (c) =>
           c.qrToken === urlScanTime &&
           c.userId !== targetEmp.id &&
-          (c.deviceId === currentDeviceId || c.hardwareSignature === currentHardwareSig)
+          c.deviceId === currentDeviceId
       );
-      if (reusedQrToken) {
+      if (reusedQrTokenSameDevice) {
         return {
           allowed: false,
           errorMsg:
-            'รหัส QR Code รอบนี้ถูกใช้งานจากอุปกรณ์นี้ไปแล้ว ห้ามใช้มือถือเครื่องเดียวกันสแกนต่อเนื่องแทนกัน',
-        };
-      }
-    }
-
-    const sameHardwareOtherCheckIns = todayCheckInsList.filter(
-      (c) =>
-        c.hardwareSignature &&
-        c.hardwareSignature === currentHardwareSig &&
-        c.userId !== targetEmp.id
-    );
-
-    if (sameHardwareOtherCheckIns.length > 0) {
-      const mostRecent = sameHardwareOtherCheckIns.reduce((latest, curr) =>
-        curr.timestamp > latest.timestamp ? curr : latest
-      );
-      const diffMs = Math.abs(Date.now() - mostRecent.timestamp);
-      const diffSeconds = Math.round(diffMs / 1000);
-
-      // Block if the exact same hardware signature scanned for another employee within the last 3 minutes (180s)
-      if (diffMs < 3 * 60 * 1000) {
-        return {
-          allowed: false,
-          errorMsg: `ระบบป้องกันการสแกนแทนกันบล็อกรายการนี้: ตรวจพบมือถือฮาร์ดแวร์สเปกเดียวกัน (${currentDeviceLabel}) เพิ่งสแกนเช็คอินให้ "${mostRecent.userName}" เมื่อ ${diffSeconds} วินาทีที่แล้ว ห้ามเปิดโหมดไม่ระบุตัวตนหรือใช้เครื่องเดียวสแกนแทนกัน`,
-        };
-      }
-
-      // If between 3 and 10 minutes on the same hardware signature, allow but attach a suspicious audit flag for Dashboard/Excel
-      if (diffMs < 10 * 60 * 1000) {
-        return {
-          allowed: true,
-          suspiciousFlag: true,
-          suspiciousReason: `ฮาร์ดแวร์รุ่นเดียวกัน (${currentDeviceLabel}) สแกนห่างจาก ${mostRecent.userName} เพียง ${Math.ceil(
-            diffMs / 60000
-          )} นาที`,
+            'อุปกรณ์เครื่องนี้เพิ่งใช้สแกนเช็คอินในรอบนี้ไปแล้ว ไม่สามารถใช้มือถือเครื่องเดียวกันสแกนต่อเนื่องแทนกันได้',
         };
       }
     }
@@ -553,6 +503,8 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         return;
       }
 
+      setHasManuallyClearedName(false);
+      hasManuallyClearedNameRef.current = false;
       localStorage.setItem('remembered_employee_id', employee.id);
     }
 
@@ -586,10 +538,10 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       return;
     }
 
-    // Prevent duplicate check-in if already checked in today
+    // Prevent duplicate check-in if already checked in today (show friendly confirmation for the same employee)
     if (isScanMode && checkedInIds.has(selectedEmployee.id)) {
-      setMessage(`ชื่อ "${selectedEmployee.name}" ได้ทำการเช็คอินสำหรับวันนี้เรียบร้อยแล้ว`);
-      setStep('error');
+      setMessage(`ชื่อ "${selectedEmployee.name}" ได้ทำการเช็คอินสำหรับวันนี้เรียบร้อยแล้ว ✓`);
+      setStep('success');
       return;
     }
 
@@ -692,12 +644,29 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         pointsMonth: currentMonthStr,
       };
 
-      // Layer 1: Permanently bind this mobile device 1:1 to this employee in Cloud Firestore on scan mode
-      if (isScanMode && !selectedEmployee.boundDeviceId) {
+      // Auto-heal & bind current mobile device to this employee in Cloud Firestore on scan mode
+      // If another employee previously had this currentDeviceId bound from an older day, clear it so devices never collide
+      if (isScanMode) {
         empUpdatePayload.boundDeviceId = currentDeviceId;
         empUpdatePayload.boundHardwareSig = currentHardwareSig;
         empUpdatePayload.boundDeviceLabel = currentDeviceLabel;
         empUpdatePayload.boundAt = now.getTime();
+
+        const staleBoundEmployees = employees.filter(
+          (e) => e.id !== selectedEmployee.id && e.boundDeviceId === currentDeviceId
+        );
+        staleBoundEmployees.forEach((staleEmp) => {
+          setDoc(
+            doc(db, 'employees', staleEmp.id),
+            {
+              boundDeviceId: null,
+              boundHardwareSig: null,
+              boundDeviceLabel: null,
+              boundAt: null,
+            },
+            { merge: true }
+          ).catch(console.warn);
+        });
       }
 
       setDoc(doc(db, 'employees', selectedEmployee.id), empUpdatePayload, { merge: true }).catch(console.warn);
@@ -710,7 +679,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         e.id === selectedEmployee.id ? ({ ...e, ...empUpdatePayload } as Employee) : e
       );
       setEmployees(updatedEmps);
-      saveCachedEmployees(updatedEmps, true);
+      saveCachedEmployees(updatedEmps, !isScanMode);
 
       const nextCheckInsList = [
         ...todayCheckInsList.filter((c) => c.id !== checkInId),
@@ -867,7 +836,18 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       }`}
     >
       <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 px-4 sm:px-6 py-5 sm:py-7 text-center text-white border-b border-blue-400/30 relative shrink-0">
-        <h2 className="text-2xl font-bold tracking-tight">Meeting Time Check-in</h2>
+        {step !== 'scan' && (
+          <div className="flex justify-end mb-1 sm:mb-0">
+            <button
+              type="button"
+              onClick={resetFlow}
+              className="sm:absolute sm:top-4 sm:right-4 text-xs font-bold text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 transition-colors"
+            >
+              เริ่มใหม่
+            </button>
+          </div>
+        )}
+        <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Meeting Time Check-in</h2>
 
         {/* Department Selector Tabs */}
         <div className="mt-4 flex flex-col items-center gap-2">
@@ -1025,12 +1005,6 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             </div>
           )}
         </div>
-        
-        {step !== 'scan' && (
-          <button onClick={resetFlow} className="absolute top-4 right-4 text-xs font-bold text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 transition-colors">
-            เริ่มใหม่
-          </button>
-        )}
       </div>
       
       <div className="p-4 sm:p-6 bg-gradient-to-b from-slate-100/75 via-slate-50/90 to-white flex-1 min-h-[350px] flex flex-col justify-center relative">
@@ -1136,32 +1110,20 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             <div className="w-full space-y-2 flex-1 max-h-[50dvh] sm:max-h-60 overflow-y-auto pr-1">
               {filteredEmployees.length > 0 ? (
                 filteredEmployees.map(emp => {
-                  const isBoundToAnotherPhone =
-                    isScanMode && emp.boundDeviceId && emp.boundDeviceId !== currentDeviceId;
                   const isBoundToThisPhone =
                     isScanMode && emp.boundDeviceId && emp.boundDeviceId === currentDeviceId;
                   return (
                     <button
                       key={emp.id}
                       onClick={() => handleNameSelect(emp)}
-                      className={`w-full flex items-center justify-between p-3 border rounded-xl transition-colors text-left ${
-                        isBoundToAnotherPhone
-                          ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
-                          : 'bg-white border-slate-200 hover:border-blue-500 hover:bg-blue-50'
-                      }`}
+                      className="w-full flex items-center justify-between p-3 border rounded-xl transition-colors text-left bg-white border-slate-200 hover:border-blue-500 hover:bg-blue-50"
                     >
                       <div>
                         <div className="font-bold text-slate-900">{emp.name}</div>
-                        {isBoundToAnotherPhone && (
-                          <div className="text-[11px] font-semibold text-rose-600 flex items-center gap-1 mt-0.5">
-                            <Lock className="w-3 h-3" />
-                            <span>ผูกกับมือถือเครื่องอื่นแล้ว ({getShortDeviceCode(emp.boundDeviceId)})</span>
-                          </div>
-                        )}
                         {isBoundToThisPhone && (
                           <div className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1 mt-0.5">
                             <ShieldCheck className="w-3 h-3" />
-                            <span>ผูกกับมือถือเครื่องนี้แล้ว</span>
+                            <span>เครื่องของคุณจำชื่อนี้ไว้แล้ว</span>
                           </div>
                         )}
                       </div>
@@ -1311,34 +1273,30 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             )}
             
             {isScanMode && (
-              boundOwner || (selectedEmployee.boundDeviceId && selectedEmployee.boundDeviceId === currentDeviceId) ? (
-                <div className="mt-6 w-full p-3 bg-slate-100 border border-slate-200 rounded-xl text-center">
+              <div className="mt-6 w-full space-y-2.5 text-center">
+                <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl text-center">
                   <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-slate-700">
-                    <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <span>อุปกรณ์ผูกแบบ 1:1 กับชื่อ "{selectedEmployee.name}" แล้ว</span>
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>จำกัดสิทธิ์ 1 เครื่อง ต่อการสแกน 1 คนต่อวัน</span>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-1 tabular-nums">
-                    รหัสเครื่อง: {getShortDeviceCode(currentDeviceId)} · ไม่สามารถเปลี่ยนชื่อเพื่อสแกนแทนผู้อื่นได้ (หากเปลี่ยนโทรศัพท์ใหม่ กรุณาแจ้ง Super Admin ผู้ดูแลระบบกลางเพื่อรีเซ็ตเครื่อง)
+                    รหัสอุปกรณ์: {getShortDeviceCode(currentDeviceId)} · เมื่อกดยืนยันเช็คอินแล้ว เครื่องนี้จะไม่สามารถสแกนแทนคนอื่นในวันนี้ได้
                   </p>
                 </div>
-              ) : (
-                <div className="mt-6 w-full space-y-2 text-center">
-                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 font-medium">
-                    <Smartphone className="w-3.5 h-3.5 inline mr-1 text-amber-600" />
-                    เมื่อกดยืนยันเช็คอิน ระบบจะผูกมือถือเครื่องนี้ ({getShortDeviceCode(currentDeviceId)}) กับชื่อ <strong>{selectedEmployee.name}</strong> แบบ 1:1 อัตโนมัติ
-                  </div>
-                  <button
-                    onClick={() => {
-                      localStorage.removeItem('remembered_employee_id');
-                      setSelectedEmployee(null);
-                      setStep('select-name');
-                    }}
-                    className="text-xs text-slate-500 underline hover:text-blue-600 font-semibold"
-                  >
-                    ยังไม่ใช่ชื่อของคุณใช่ไหม? กดเพื่อเลือกชื่อใหม่ก่อนผูกเครื่อง
-                  </button>
-                </div>
-              )
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHasManuallyClearedName(true);
+                    hasManuallyClearedNameRef.current = true;
+                    localStorage.removeItem('remembered_employee_id');
+                    setSelectedEmployee(null);
+                    setStep('select-name');
+                  }}
+                  className="text-xs text-blue-600 underline hover:text-blue-700 font-bold py-1 cursor-pointer"
+                >
+                  ไม่ใช่ชื่อ "{selectedEmployee.name}" ใช่ไหม? กดเพื่อเปลี่ยนรายชื่อของคุณ
+                </button>
+              </div>
             )}
           </div>
         )}

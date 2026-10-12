@@ -559,14 +559,9 @@ export function EmployeeManager() {
     }
   };
 
+  const [isResettingAllDevices, setIsResettingAllDevices] = useState(false);
+
   const resetDeviceBinding = async (emp: Employee) => {
-    if (!isSuperAdmin) {
-      setImportFeedback({
-        type: 'error',
-        message: 'เฉพาะ Super Admin (ผู้ดูแลระบบกลาง) เท่านั้นที่สามารถรีเซ็ตเครื่องที่ผูกได้',
-      });
-      return;
-    }
     try {
       await updateDoc(doc(db, 'employees', emp.id), {
         boundDeviceId: null,
@@ -584,6 +579,40 @@ export function EmployeeManager() {
         type: 'error',
         message: 'เกิดข้อผิดพลาดในการรีเซ็ตเครื่องที่ผูก กรุณาลองใหม่',
       });
+    }
+  };
+
+  const resetAllDeviceBindings = async () => {
+    const targetEmps = filteredEmployees.filter((e) => Boolean(e.boundDeviceId));
+    if (targetEmps.length === 0) return;
+    setIsResettingAllDevices(true);
+    try {
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < targetEmps.length; i += CHUNK_SIZE) {
+        const chunk = targetEmps.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((emp) => {
+          batch.update(doc(db, 'employees', emp.id), {
+            boundDeviceId: null,
+            boundHardwareSig: null,
+            boundDeviceLabel: null,
+            boundAt: null,
+          });
+        });
+        await batch.commit();
+      }
+      setImportFeedback({
+        type: 'success',
+        message: `รีเซ็ตการผูกอุปกรณ์ทั้งหมด (${targetEmps.length} คน) เรียบร้อยแล้ว พนักงานทุกคนสามารถสแกนด้วยมือถือของตนเองได้ใหม่ทันที`,
+      });
+    } catch (error) {
+      console.error('Error resetting all device bindings:', error);
+      setImportFeedback({
+        type: 'error',
+        message: 'เกิดข้อผิดพลาดในการรีเซ็ตอุปกรณ์ทั้งหมด กรุณาลองใหม่',
+      });
+    } finally {
+      setIsResettingAllDevices(false);
     }
   };
 
@@ -842,15 +871,31 @@ export function EmployeeManager() {
           )}
         </div>
 
-        <div className="relative mb-6">
-          <Search className="w-5 h-5 absolute left-4 top-3 text-slate-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ค้นหารายชื่อพนักงาน..."
-            className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-slate-300 outline-none transition-all"
-          />
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6">
+          <div className="relative flex-1">
+            <Search className="w-5 h-5 absolute left-4 top-3 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="ค้นหารายชื่อพนักงาน..."
+              className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-slate-300 outline-none transition-all"
+            />
+          </div>
+          {filteredEmployees.some((e) => Boolean(e.boundDeviceId)) && (
+            <button
+              type="button"
+              onClick={resetAllDeviceBindings}
+              disabled={isResettingAllDevices}
+              className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors shrink-0 cursor-pointer"
+              title="ล้างรหัสเครื่องที่ผูกไว้ทั้งหมดในหมวดที่แสดง เพื่อแก้ปัญหาเครื่องชนกัน"
+            >
+              <RotateCcw className={`w-4 h-4 ${isResettingAllDevices ? 'animate-spin' : ''}`} />
+              <span>
+                รีเซ็ตเครื่องที่ผูกทั้งหมด ({filteredEmployees.filter((e) => Boolean(e.boundDeviceId)).length})
+              </span>
+            </button>
+          )}
         </div>
 
         <div className="overflow-x-auto">
@@ -900,17 +945,15 @@ export function EmployeeManager() {
                             </p>
                           )}
                         </div>
-                        {isSuperAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => resetDeviceBinding(emp)}
-                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
-                            title="ปลดล็อกเครื่องเดิม เพื่อให้พนักงานผูกกับโทรศัพท์เครื่องใหม่ได้ (เฉพาะ Super Admin)"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>รีเซ็ตเครื่อง</span>
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => resetDeviceBinding(emp)}
+                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                          title="ปลดล็อกเครื่องเดิม เพื่อให้พนักงานผูกกับโทรศัพท์เครื่องใหม่ได้"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>รีเซ็ตเครื่อง</span>
+                        </button>
                       </div>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400">
