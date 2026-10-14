@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LayoutDashboard, Fingerprint, Users, FileText, Shield, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Fingerprint, Users, FileText, Shield, LogOut } from 'lucide-react';
 import { CheckIn } from './CheckIn';
 
 const Dashboard = React.lazy(() =>
@@ -28,7 +28,6 @@ export function Layout() {
   const [activeTab, setActiveTab] = useState<TabType>(
     isKiosk ? 'checkin' : profile?.role === 'manager' ? 'dashboard' : 'checkin'
   );
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (isKiosk) {
@@ -83,7 +82,6 @@ export function Layout() {
 
   const handleSelectTab = (tab: TabType) => {
     setActiveTab(tab);
-    setMobileMenuOpen(false);
   };
 
   return (
@@ -143,87 +141,10 @@ export function Layout() {
         </div>
       </aside>
 
-      {/* Mobile Slide-Over Drawer */}
-      {mobileMenuOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs lg:hidden flex"
-          onClick={() => setMobileMenuOpen(false)}
-        >
-          <aside
-            className="w-72 max-w-[82vw] h-full bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white flex flex-col shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-lg">
-                  M
-                </div>
-                <span className="text-base font-bold tracking-tight">Meeting Check-in</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMobileMenuOpen(false)}
-                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <nav className="flex-1 p-3 space-y-1.5 overflow-y-auto">
-              {visibleNavItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => handleSelectTab(item.id)}
-                    className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-colors ${
-                      activeTab === item.id
-                        ? 'bg-blue-600 text-white font-bold shadow-xs'
-                        : 'text-slate-300 hover:bg-slate-800'
-                    }`}
-                  >
-                    <Icon className="w-5 h-5 shrink-0" />
-                    <span className="text-sm">{item.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-
-            <div className="p-4 border-t border-slate-800 space-y-3">
-              <div className="flex items-center space-x-3 overflow-hidden">
-                <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-sm font-bold shrink-0">
-                  {profile?.name?.charAt(0)?.toUpperCase() || 'U'}
-                </div>
-                <div className="truncate">
-                  <p className="text-sm font-semibold truncate">{profile?.name}</p>
-                  <p className="text-xs text-slate-400 truncate">{scopeLabel}</p>
-                </div>
-              </div>
-
-              <button
-                onClick={logout}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>สลับบัญชี / ออกจากระบบ</span>
-              </button>
-            </div>
-          </aside>
-        </div>
-      )}
-
       {/* Main Content Area (100% width on mobile) */}
       <main className="flex-1 flex flex-col w-full min-w-0 overflow-hidden">
-        <header className="h-14 lg:h-16 bg-white border-b border-slate-200 px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 shadow-xs shrink-0">
+        <header className="h-14 lg:h-16 bg-white border-b border-slate-200 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 shadow-xs shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
-              title="เปิดเมนู"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
             <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-800 truncate">
               {activeTab === 'dashboard'
                 ? 'Executive Dashboard'
