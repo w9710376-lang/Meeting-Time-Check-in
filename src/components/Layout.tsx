@@ -89,7 +89,7 @@ export function Layout() {
   return (
     <div className="flex flex-col lg:flex-row h-[100dvh] w-full bg-gradient-to-br from-slate-100 via-slate-50 to-blue-50/40 font-sans text-slate-900 overflow-hidden">
       {/* Desktop Sidebar (lg and up) */}
-      <aside className="hidden lg:flex lg:w-64 lg:shrink-0 bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white flex-col border-r border-slate-800/80">
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white border-r border-slate-800/80">
         <div className="p-6 flex items-center space-x-3">
           <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-xl shrink-0">
             M
@@ -219,7 +219,7 @@ export function Layout() {
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 -ml-1 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
+              className="lg:hidden p-2 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
               title="เปิดเมนู"
             >
               <Menu className="w-5 h-5" />
@@ -257,7 +257,7 @@ export function Layout() {
         </header>
 
         <div
-          className={`flex-1 overflow-y-auto overflow-x-hidden w-full ${
+          className={`flex-1 overflow-y-auto overflow-x-hidden w-full max-w-full min-w-0 ${
             activeTab === 'checkin'
               ? 'p-0 sm:p-4 lg:p-8 pb-16 lg:pb-8 flex flex-col'
               : 'p-3 sm:p-5 lg:p-8 pb-20 lg:pb-8'

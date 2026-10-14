@@ -17,6 +17,7 @@ import {
   fetchFastCheckinCache,
 } from '../lib/checkinFastCache';
 import { getNonWorkingDayInfo } from '../lib/thaiHolidays';
+import { getCheckInWindowStatus } from '../lib/checkinTime';
 
 type Step = 'scan' | 'select-name' | 'meeting' | 'processing' | 'success' | 'error';
 
@@ -166,9 +167,17 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   const isQrExpired =
     isScanMode &&
     (!urlScanTime || isNaN(parsedScanTime) || Math.abs(Date.now() - parsedScanTime) > 12 * 60 * 60 * 1000);
+
+  const initialCheckInWindow = getCheckInWindowStatus(
+    (urlDept && initialTimeCache.deptTimeRanges[urlDept]) || urlTimeRange || initialTimeCache.defaultTimeRange,
+    new Date()
+  );
+  const isEarlyScan = isScanMode && initialCheckInWindow.isBeforeStart;
+
   const [step, setStep] = useState<Step>(() => {
     if (!isScanMode) return 'scan';
     if (isQrExpired) return 'error';
+    if (isEarlyScan) return 'error';
     const initialMatched = resolveScanEmployee(
       initialEmpCache.employees,
       currentDeviceId,
@@ -184,7 +193,13 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   const [skipReasonCustom, setSkipReasonCustom] = useState<string>('');
   const [skipReasonError, setSkipReasonError] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [message, setMessage] = useState(isQrExpired ? 'QR Code หมดอายุ กรุณาสแกนใหม่จากหน้าจอหลัก' : '');
+  const [message, setMessage] = useState(() => {
+    if (isQrExpired) return 'QR Code หมดอายุ กรุณาสแกนใหม่จากหน้าจอหลัก';
+    if (isEarlyScan) {
+      return `ยังไม่ถึงเวลาเปิดเช็คอินของแผนก ${urlDept || 'IE'} (กำหนดเปิดเวลา ${initialCheckInWindow.startLabel} - ${initialCheckInWindow.endLabel} น.) กรุณาสแกนอีกครั้งเมื่อถึงเวลา`;
+    }
+    return '';
+  });
 
   const [defaultTimeRange, setDefaultTimeRange] = useState<string>(
     () => initialTimeCache.defaultTimeRange
@@ -238,29 +253,11 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     }
   };
 
-  // Calculate if QR code should be visible based on current time and targetTimeRange
-  const isCheckInOpen = () => {
-    const hours = currentTime.getHours();
-    const minutes = currentTime.getMinutes();
-    const timeVal = hours + minutes / 60;
-
-    let limitTimeVal = 9.0; // Default fallback
-    const timeParts = targetTimeRange.split('-');
-    if (timeParts.length > 1) {
-      const endTimeStr = timeParts[1].trim();
-      const endParts = endTimeStr.split(':');
-      if (endParts.length >= 2) {
-        const limitHours = parseInt(endParts[0], 10);
-        const limitMinutes = parseInt(endParts[1], 10);
-        if (!isNaN(limitHours) && !isNaN(limitMinutes)) {
-          limitTimeVal = limitHours + limitMinutes / 60;
-        }
-      }
-    }
-    
-    // Let's hide the QR code completely if it's past the end time.
-    return timeVal <= limitTimeVal;
-  };
+  const checkInWindow = useMemo(
+    () => getCheckInWindowStatus(targetTimeRange, currentTime),
+    [targetTimeRange, currentTime]
+  );
+  const isCheckInOpen = () => checkInWindow.isOpen;
 
   useEffect(() => {
     // Load config
@@ -298,8 +295,13 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       return url.toString();
     };
 
+    const win = getCheckInWindowStatus(targetTimeRange, new Date());
     if (!isScanMode) {
-      setAppUrl(buildQrUrl());
+      if (win.isOpen) {
+        setAppUrl(buildQrUrl());
+      } else {
+        setAppUrl('');
+      }
     } else {
       setAppUrl(window.location.href);
     }
@@ -308,9 +310,16 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       const now = new Date();
       setCurrentTime(now);
       
-      // Dynamic QR: Update QR code token every 10 seconds for central screen
-      if (!isScanMode && now.getSeconds() % 10 === 0) {
-        setAppUrl(buildQrUrl());
+      // Dynamic QR: Update QR code token every 10 seconds for central screen only when open
+      if (!isScanMode) {
+        const currentWin = getCheckInWindowStatus(targetTimeRange, now);
+        if (!currentWin.isOpen) {
+          setAppUrl((prev) => (prev ? '' : prev));
+        } else if (now.getSeconds() % 10 === 0) {
+          setAppUrl(buildQrUrl());
+        } else {
+          setAppUrl((prev) => (prev ? prev : buildQrUrl()));
+        }
       }
     }, 1000);
     
@@ -445,6 +454,17 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
+    // Rule 0: Check-in window check - prevent scanning before opening start time
+    const targetDept = targetEmp.department || selectedDept;
+    const empTimeRange = deptTimeRanges[targetDept] || defaultTimeRange;
+    const windowCheck = getCheckInWindowStatus(empTimeRange, new Date());
+    if (windowCheck.isBeforeStart) {
+      return {
+        allowed: false,
+        errorMsg: `ยังไม่ถึงเวลาเปิดเช็คอินของแผนก ${targetDept} (กำหนดเปิดเวลา ${windowCheck.startLabel} น.) กรุณาสแกน QR Code อีกครั้งเมื่อถึงเวลาประชุมเช้า`,
+      };
+    }
+
     // Rule 1: LocalStorage on this browser already recorded a check-in for a DIFFERENT employee today
     const lockedDate = localStorage.getItem('device_checkin_date');
     const lockedEmp = localStorage.getItem('device_checkin_emp');
@@ -557,6 +577,16 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       const empDept: Department = selectedEmployee?.department || selectedDept;
       const activeTimeRange = deptTimeRanges[empDept] || defaultTimeRange;
 
+      // Validate check-in window: ensure not before opening start time
+      const windowCheck = getCheckInWindowStatus(activeTimeRange, now);
+      if (windowCheck.isBeforeStart) {
+        setMessage(
+          `ยังไม่ถึงเวลาเปิดเช็คอินของแผนก ${empDept} (กำหนดเปิดเวลา ${windowCheck.startLabel} - ${windowCheck.endLabel} น.) กรุณาสแกน QR Code อีกครั้งเมื่อถึงเวลา`
+        );
+        setStep('error');
+        return;
+      }
+
       // Parse the targetTimeRange to get start and end times for point calculation
       let startHours = 7, startMinutes = 30; // Default 07:30
       let endHours = 7, endMinutes = 45; // Default 07:45
@@ -576,9 +606,10 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         }
       }
       
+      const startTimeVal = startHours + startMinutes / 60;
       const limitTimeVal = endHours + endMinutes / 60;
       
-      const isOnTime = timeVal <= limitTimeVal;
+      const isOnTime = timeVal >= startTimeVal && timeVal <= limitTimeVal;
       const checkInStatus = isOnTime ? 'on-time' : 'late';
       const delayMinutes = isOnTime
         ? 0
@@ -591,7 +622,6 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
         const totalDurationMinutes = (endHours * 60 + endMinutes) - (startHours * 60 + startMinutes);
         
         // Calculate minutes elapsed since start
-        // If they scan before start time, it will be negative, we cap it at 0
         const elapsedMinutes = Math.max(0, (hours * 60 + minutes) - (startHours * 60 + startMinutes));
         
         if (totalDurationMinutes > 0) {
@@ -837,11 +867,11 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
     >
       <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 px-4 sm:px-6 py-5 sm:py-7 text-center text-white border-b border-blue-400/30 relative shrink-0">
         {step !== 'scan' && (
-          <div className="flex justify-end mb-1 sm:mb-0">
+          <div className="absolute top-3.5 right-3.5 z-10">
             <button
               type="button"
               onClick={resetFlow}
-              className="sm:absolute sm:top-4 sm:right-4 text-xs font-bold text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 transition-colors"
+              className="text-xs font-bold text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 transition-colors shadow-xs"
             >
               เริ่มใหม่
             </button>
@@ -970,7 +1000,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
           );
         })()}
         
-        <div className="mt-4 flex justify-center items-center">
+        <div className="mt-3 sm:mt-4 flex flex-wrap justify-center items-center gap-2">
           {isEditingTime ? (
             <div className="flex items-center space-x-2 bg-slate-800 p-1.5 rounded-lg border border-slate-700">
               <span className="text-xs font-bold text-blue-400 pl-2">{selectedDept}:</span>
@@ -990,67 +1020,136 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
               </button>
             </div>
           ) : (
-            <div className="flex items-center space-x-2 text-slate-200 text-sm bg-slate-800/60 px-4 py-2 rounded-full border border-slate-700/60 group">
-              <Clock className="w-4 h-4 text-blue-400" />
+            <div className="flex items-center space-x-2 text-slate-200 text-xs sm:text-sm bg-slate-800/60 px-3.5 py-1.5 rounded-full border border-slate-700/60 group">
+              <Clock className="w-4 h-4 text-blue-400 shrink-0" />
               <span>เวลาเข้าประชุม ({selectedDept}): <strong className="text-white">{targetTimeRange} น.</strong></span>
               {canEditTime && (
                 <button 
                   onClick={() => { setEditTimeValue(targetTimeRange); setIsEditingTime(true); }} 
-                  className="ml-2 text-slate-400 hover:text-white transition-colors"
+                  className="ml-1.5 text-slate-400 hover:text-white transition-colors"
                   title={`แก้ไขเวลาเช็คอินของแผนก ${selectedDept}`}
                 >
-                  <Edit2 className="w-4 h-4" />
+                  <Edit2 className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
           )}
+
+          {step === 'scan' && (
+            <button
+              type="button"
+              onClick={handleScanSuccess}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-xs transition-colors cursor-pointer"
+              title="ค้นหารายชื่อเพื่อเช็คอินด้วยตนเอง"
+            >
+              <Search className="w-3.5 h-3.5 text-cyan-200" />
+              <span>ค้นหารายชื่อ ({selectedDept})</span>
+            </button>
+          )}
         </div>
       </div>
       
-      <div className="p-4 sm:p-6 bg-gradient-to-b from-slate-100/75 via-slate-50/90 to-white flex-1 min-h-[350px] flex flex-col justify-center relative">
+      <div className="p-3.5 sm:p-6 bg-gradient-to-b from-slate-100/75 via-slate-50/90 to-white flex-1 min-h-[300px] flex flex-col justify-center relative">
         {step === 'scan' && (
-          <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
-            {isCheckInOpen() ? (
+          <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300 w-full max-w-sm mx-auto">
+            {checkInWindow.isOpen ? (
               <>
-                <div className="mb-3 inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
+                <div className="mb-2 inline-flex items-center px-3 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
                   <Building2 className="w-3.5 h-3.5 mr-1.5" />
                   QR Code สำหรับแผนก {selectedDept} (รอเช็คอิน {filteredEmployees.length} คน)
                 </div>
+
                 <div
                   onClick={() => setIsQrExpanded(true)}
                   title="คลิกเพื่อขยาย QR Code ให้ใหญ่"
-                  className="w-64 h-64 bg-white rounded-2xl mb-3 relative overflow-hidden border-2 border-slate-200 hover:border-blue-500 shadow-sm flex items-center justify-center p-5 cursor-pointer group transition-all"
+                  className="w-48 h-48 sm:w-60 sm:h-60 bg-white rounded-2xl mb-3 relative overflow-hidden border-2 border-slate-200 hover:border-blue-500 shadow-sm flex items-center justify-center p-3.5 cursor-pointer group transition-all"
                 >
-                  {appUrl && <QRCode value={appUrl} size={220} className="w-full h-full text-slate-800" />}
+                  {appUrl && <QRCode value={appUrl} size={190} className="w-full h-full text-slate-800" />}
                   <div className="absolute top-2.5 right-2.5 bg-slate-900/80 group-hover:bg-blue-600 text-white p-1.5 rounded-lg shadow transition-colors">
                     <Maximize2 className="w-4 h-4" />
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsQrExpanded(true)}
-                  className="mb-5 inline-flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold rounded-xl shadow-sm transition-all"
-                >
-                  <Maximize2 className="w-4 h-4 text-blue-400" />
-                  <span>ขยาย QR Code ให้ใหญ่</span>
-                </button>
-                <h3 className="text-lg font-bold text-slate-900">สแกน QR Code แผนก {selectedDept}</h3>
-                <p className="text-slate-500 text-sm mt-1 text-center mb-6">นำกล้องจ่อที่ QR Code หน้าห้องประชุมเพื่อเช็คอินเข้าแผนก {selectedDept}</p>
-                
-                <button
-                  onClick={handleScanSuccess}
-                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition-colors"
-                >
-                  ค้นหารายชื่อแผนก {selectedDept}
-                </button>
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <div className="w-20 h-20 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-4">
-                  <Clock className="w-10 h-10" />
+
+                {/* Primary Action Buttons: 1. Big Blue "Search Name" + 2. "Expand QR" */}
+                <div className="w-full max-w-xs flex flex-col gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={handleScanSuccess}
+                    className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-[0.99] text-white font-extrabold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-sm sm:text-base border border-blue-400/30 ring-2 ring-blue-500/20 cursor-pointer"
+                  >
+                    <Search className="w-4 h-4 text-cyan-200 shrink-0" />
+                    <span>ค้นหารายชื่อเพื่อเช็คอิน (แผนก {selectedDept})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsQrExpanded(true)}
+                    className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 px-3 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5 text-blue-400" />
+                    <span>ขยาย QR Code ให้ใหญ่</span>
+                  </button>
                 </div>
-                <h3 className="text-xl font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {selectedDept})</h3>
-                <p className="text-slate-500 mt-2 max-w-xs">เลยกำหนดเวลาเข้าประชุมของแผนก {selectedDept} ({targetTimeRange} น.) หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ</p>
+
+                <h3 className="text-sm font-bold text-slate-800">สแกน QR Code แผนก {selectedDept}</h3>
+                <p className="text-slate-500 text-xs mt-0.5 text-center max-w-xs">
+                  นำกล้องจ่อที่ QR Code หน้าห้องประชุม หรือแตะปุ่มสีฟ้าด้านบนเพื่อค้นหารายชื่อ
+                </p>
+              </>
+            ) : checkInWindow.isBeforeStart ? (
+              <div className="flex flex-col items-center justify-center py-6 text-center animate-in fade-in w-full">
+                <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-3 shadow-xs">
+                  <Clock className="w-8 h-8" />
+                </div>
+                <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 mb-2">
+                  <Clock className="w-3.5 h-3.5 mr-1.5" />
+                  รอเปิดเช็คอินเวลา {checkInWindow.startLabel} น.
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">ยังไม่ถึงเวลาเปิดเช็คอิน (แผนก {selectedDept})</h3>
+                <p className="text-slate-500 mt-1 max-w-xs text-xs">
+                  ช่วงเวลาเข้าประชุมของแผนก {selectedDept} คือ <strong>{targetTimeRange} น.</strong><br />
+                  ระบบจะเปิดแสดง QR Code อัตโนมัติเมื่อถึงเวลา <strong>{checkInWindow.startLabel} น.</strong>
+                </p>
+
+                {/* Primary Action Button: Always accessible to search/view names */}
+                <div className="mt-4 w-full max-w-xs">
+                  <button
+                    type="button"
+                    onClick={handleScanSuccess}
+                    className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-[0.99] text-white font-extrabold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-sm sm:text-base border border-blue-400/30 ring-2 ring-blue-500/20 cursor-pointer"
+                  >
+                    <Search className="w-4 h-4 text-cyan-200 shrink-0" />
+                    <span>ค้นหารายชื่อพนักงาน (แผนก {selectedDept})</span>
+                  </button>
+                  <p className="text-[11px] text-slate-400 mt-1 text-center">
+                    แตะเพื่อตรวจสอบรายชื่อผู้ที่ยังไม่ได้เช็คอิน
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-6 text-center w-full">
+                <div className="w-16 h-16 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-3">
+                  <Clock className="w-8 h-8" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {selectedDept})</h3>
+                <p className="text-slate-500 mt-1 max-w-xs text-xs">
+                  เลยกำหนดเวลาเข้าประชุมของแผนก {selectedDept} ({targetTimeRange} น.) หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ
+                </p>
+
+                {/* Primary Action Button: Always accessible to search/view names */}
+                <div className="mt-4 w-full max-w-xs">
+                  <button
+                    type="button"
+                    onClick={handleScanSuccess}
+                    className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-[0.99] text-white font-extrabold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-sm sm:text-base border border-blue-400/30 ring-2 ring-blue-500/20 cursor-pointer"
+                  >
+                    <Search className="w-4 h-4 text-cyan-200 shrink-0" />
+                    <span>ค้นหารายชื่อพนักงาน (แผนก {selectedDept})</span>
+                  </button>
+                  <p className="text-[11px] text-slate-400 mt-1 text-center">
+                    แตะเพื่อค้นหารายชื่อหรือตรวจสอบสถานะการเช็คอิน
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -1354,7 +1453,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
       </div>
       
       {/* Expanded QR Code Modal */}
-      {isQrExpanded && step === 'scan' && isCheckInOpen() && (
+      {isQrExpanded && step === 'scan' && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
           onClick={() => setIsQrExpanded(false)}
@@ -1414,18 +1513,47 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
             )}
 
             <div className="p-6 sm:p-8 bg-slate-50 flex flex-col items-center">
-              <div className="w-[min(76vw,420px)] h-[min(76vw,420px)] bg-white rounded-3xl p-6 border-4 border-blue-500 shadow-xl flex items-center justify-center">
-                {appUrl && <QRCode value={appUrl} size={380} className="w-full h-full text-slate-900" />}
-              </div>
+              {checkInWindow.isOpen ? (
+                <>
+                  <div className="w-[min(76vw,420px)] h-[min(76vw,420px)] bg-white rounded-3xl p-6 border-4 border-blue-500 shadow-xl flex items-center justify-center">
+                    {appUrl && <QRCode value={appUrl} size={380} className="w-full h-full text-slate-900" />}
+                  </div>
 
-              <div className="mt-5 text-center">
-                <p className="text-base font-bold text-slate-800">
-                  นำกล้องโทรศัพท์สแกน QR Code เพื่อเช็คอินแผนก <span className="text-blue-600">{selectedDept}</span>
-                </p>
-                <p className="text-xs text-slate-500 mt-1">
-                  ระบบรีเฟรชรหัสความปลอดภัยอัตโนมัติทุก 10 วินาที
-                </p>
-              </div>
+                  <div className="mt-5 text-center">
+                    <p className="text-base font-bold text-slate-800">
+                      นำกล้องโทรศัพท์สแกน QR Code เพื่อเช็คอินแผนก <span className="text-blue-600">{selectedDept}</span>
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      ระบบรีเฟรชรหัสความปลอดภัยอัตโนมัติทุก 10 วินาที
+                    </p>
+                  </div>
+                </>
+              ) : checkInWindow.isBeforeStart ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center animate-in fade-in">
+                  <div className="w-20 h-20 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4">
+                    <Clock className="w-10 h-10" />
+                  </div>
+                  <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 mb-2">
+                    <Clock className="w-3.5 h-3.5 mr-1.5" />
+                    รอเปิดเช็คอินเวลา {checkInWindow.startLabel} น.
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900">ยังไม่ถึงเวลาเปิดเช็คอิน (แผนก {selectedDept})</h3>
+                  <p className="text-slate-500 mt-2 max-w-xs text-sm">
+                    ช่วงเวลาเข้าประชุมของแผนก {selectedDept} คือ <strong>{targetTimeRange} น.</strong><br />
+                    ระบบจะเปิดแสดง QR Code อัตโนมัติเมื่อถึงเวลา <strong>{checkInWindow.startLabel} น.</strong>
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <div className="w-20 h-20 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-4">
+                    <Clock className="w-10 h-10" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {selectedDept})</h3>
+                  <p className="text-slate-500 mt-2 max-w-xs text-sm">
+                    เลยกำหนดเวลาเข้าประชุมของแผนก {selectedDept} ({targetTimeRange} น.) หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ
+                  </p>
+                </div>
+              )}
 
               <button
                 type="button"
@@ -1433,7 +1561,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                 className="mt-6 inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-sm transition-colors"
               >
                 <Minimize2 className="w-4 h-4 text-blue-400" />
-                <span>ย่อขนาด QR Code</span>
+                <span>{checkInWindow.isOpen ? 'ย่อขนาด QR Code' : 'ปิดหน้าต่าง'}</span>
               </button>
             </div>
           </div>

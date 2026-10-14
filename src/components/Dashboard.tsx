@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { collection, query, where, getDocs, onSnapshot, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { CheckIn, Employee, Department } from '../types';
@@ -6,9 +6,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
 import * as XLSX from 'xlsx';
 import QRCode from 'react-qr-code';
-import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, Maximize2, Minimize2, Building2, X, Clock } from 'lucide-react';
+import { Download, Users, AlertCircle, CheckCircle2, CalendarCheck, CalendarX, Maximize2, Minimize2, Building2, X, Clock, Tv } from 'lucide-react';
 import { Leaderboard } from './Leaderboard';
 import { MorningMeeting3DCard } from './MorningMeeting3DCard';
+import { LiveMeetingSplitView } from './LiveMeetingSplitView';
 import {
   getInitialCachedEmployees,
   saveCachedEmployees,
@@ -16,6 +17,7 @@ import {
   saveCachedTimeRanges,
 } from '../lib/checkinFastCache';
 import { getNonWorkingDayInfo, isWorkingDay } from '../lib/thaiHolidays';
+import { getCheckInWindowStatus } from '../lib/checkinTime';
 
 export function Dashboard() {
   const { profile, departments } = useAuth();
@@ -40,6 +42,13 @@ export function Dashboard() {
   );
   const [qrUrl, setQrUrl] = useState('');
   const [isQrExpanded, setIsQrExpanded] = useState(false);
+  const [viewMode, setViewMode] = useState<'standard' | 'split'>('standard');
+
+  const handleSelectQrDept = useCallback((dept: Department) => {
+    if (scopedDept) return;
+    setQrDept(dept);
+    localStorage.setItem('selected_checkin_dept', dept);
+  }, [scopedDept]);
 
   useEffect(() => {
     setSelectedDept(scopedDept || 'ALL');
@@ -47,12 +56,6 @@ export function Dashboard() {
       setQrDept(scopedDept);
     }
   }, [scopedDept]);
-
-  useEffect(() => {
-    if (selectedDept !== 'ALL') {
-      setQrDept(selectedDept);
-    }
-  }, [selectedDept]);
 
   useEffect(() => {
     if (!isQrExpanded) return;
@@ -67,30 +70,7 @@ export function Dashboard() {
 
   const activeQrDept: Department = scopedDept || qrDept || departments[0] || 'IE';
   const activeQrTimeRange = deptTimeRanges[activeQrDept] || defaultTimeRange;
-
-  const isCheckInOpenForRange = (timeRange: string, now: Date = currentTime) => {
-    const hours = now.getHours();
-    const minutes = now.getMinutes();
-    const timeVal = hours + minutes / 60;
-
-    let limitTimeVal = 9.0; // Default fallback
-    const timeParts = (timeRange || '07:30-07:45').split('-');
-    if (timeParts.length > 1) {
-      const endTimeStr = timeParts[1].trim();
-      const endParts = endTimeStr.split(':');
-      if (endParts.length >= 2) {
-        const limitHours = parseInt(endParts[0], 10);
-        const limitMinutes = parseInt(endParts[1], 10);
-        if (!isNaN(limitHours) && !isNaN(limitMinutes)) {
-          limitTimeVal = limitHours + limitMinutes / 60;
-        }
-      }
-    }
-
-    return timeVal <= limitTimeVal;
-  };
-
-  const isQrCheckInOpen = isCheckInOpenForRange(activeQrTimeRange, currentTime);
+  const qrWindow = getCheckInWindowStatus(activeQrTimeRange, currentTime);
 
   useEffect(() => {
     const unsubSettings = onSnapshot(doc(db, 'settings', 'checkin'), (docSnap) => {
@@ -123,23 +103,23 @@ export function Dashboard() {
       return url.toString();
     };
 
-    const updateQrState = (now: Date) => {
-      if (isCheckInOpenForRange(activeQrTimeRange, now)) {
-        setQrUrl(buildQrUrl());
-      } else {
-        setQrUrl('');
-      }
-    };
-
-    updateQrState(new Date());
+    const win = getCheckInWindowStatus(activeQrTimeRange, new Date());
+    if (win.isOpen) {
+      setQrUrl(buildQrUrl());
+    } else {
+      setQrUrl('');
+    }
 
     const timer = setInterval(() => {
       const now = new Date();
       setCurrentTime(now);
-      if (!isCheckInOpenForRange(activeQrTimeRange, now)) {
-        setQrUrl('');
+      const currentWin = getCheckInWindowStatus(activeQrTimeRange, now);
+      if (!currentWin.isOpen) {
+        setQrUrl((prev) => (prev ? '' : prev));
       } else if (now.getSeconds() % 10 === 0) {
         setQrUrl(buildQrUrl());
+      } else {
+        setQrUrl((prev) => (prev ? prev : buildQrUrl()));
       }
     }, 1000);
 
@@ -305,22 +285,50 @@ export function Dashboard() {
   const qrDeptCheckedInIds = new Set(qrDeptCheckIns.map(c => c.userId));
   const qrDeptMissingCount = qrDeptEmployees.filter(e => !qrDeptCheckedInIds.has(e.id)).length;
 
-  const handleSelectQrDept = (dept: Department) => {
-    if (scopedDept) return;
-    setQrDept(dept);
-    localStorage.setItem('selected_checkin_dept', dept);
-  };
+
+  if (viewMode === 'split') {
+    return (
+      <LiveMeetingSplitView
+        departments={departments}
+        scopedDept={scopedDept}
+        selectedDept={selectedDept}
+        onSelectDept={setSelectedDept}
+        activeQrDept={activeQrDept}
+        onSelectQrDept={handleSelectQrDept}
+        activeQrTimeRange={activeQrTimeRange}
+        defaultTimeRange={defaultTimeRange}
+        deptTimeRanges={deptTimeRanges}
+        employees={employees}
+        filteredEmployees={filteredEmployees}
+        todayCheckIns={todayCheckIns}
+        filteredCheckIns={filteredCheckIns}
+        missingEmployees={missingEmployees}
+        meetingJoinedCount={meetingJoinedCount}
+        meetingSkippedCount={meetingSkippedCount}
+        onTimeCount={onTimeCount}
+        lateCount={lateCount}
+        missingCount={missingCount}
+        joinPct={joinPct}
+        skipPct={skipPct}
+        missingPct={missingPct}
+        monthlyPointsMap={monthlyPointsMap}
+        todayHolidayInfo={todayHolidayInfo}
+        onExitSplitMode={() => setViewMode('standard')}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-700">
-            Executive Dashboard: <span className="text-blue-600 font-bold">{format(new Date(), 'MMM dd, yyyy')}</span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0 max-w-full">
+        <div className="min-w-0 max-w-full">
+          <h1 className="text-base sm:text-lg font-semibold text-slate-700 leading-snug">
+            Executive Dashboard: <span className="text-blue-600 font-bold block sm:inline">{format(new Date(), 'MMM dd, yyyy')}</span>
           </h1>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {!scopedDept && (
               <button
+                type="button"
                 onClick={() => setSelectedDept('ALL')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
                   selectedDept === 'ALL' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
@@ -332,10 +340,10 @@ export function Dashboard() {
             {(scopedDept ? [scopedDept] : departments).map(dept => (
               <button
                 key={dept}
+                type="button"
                 onClick={() => {
                   setSelectedDept(dept);
-                  setQrDept(dept);
-                  localStorage.setItem('selected_checkin_dept', dept);
+                  handleSelectQrDept(dept);
                 }}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
                   selectedDept === dept ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
@@ -346,21 +354,36 @@ export function Dashboard() {
             ))}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto min-w-0">
+          {/* TV/Projector presentation mode: visible on tablet/desktop/TV screen */}
+          <button
+            type="button"
+            onClick={() => setViewMode(prev => prev === 'split' ? 'standard' : 'split')}
+            className={`hidden sm:inline-flex px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold items-center shadow-xs transition-all ${
+              viewMode === 'split'
+                ? 'bg-blue-600 hover:bg-blue-700 text-white ring-2 ring-blue-400/30'
+                : 'bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 hover:from-blue-600 hover:to-slate-800 text-white'
+            }`}
+            title="เปิดโหมดจอคู่สำหรับทีวี/โปรเจกเตอร์หน้าห้องประชุม ให้สแกน QR ไปพร้อมกับดูแดชบอร์ด"
+          >
+            <Tv className="w-4 h-4 mr-1.5 text-cyan-300" />
+            <span>{viewMode === 'split' ? 'กลับสู่มุมมองปกติ' : 'โหมดจอพรีเซนต์ (Split)'}</span>
+          </button>
           <button
             type="button"
             onClick={() => setIsQrExpanded(true)}
-            className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-sm transition-colors"
+            className="flex-1 sm:flex-initial bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center justify-center shadow-xs transition-colors whitespace-nowrap"
           >
-            <Maximize2 className="w-4 h-4 mr-2 text-blue-400" />
-            ขยาย QR Code ({activeQrDept})
+            <Maximize2 className="w-4 h-4 mr-1.5 text-blue-400" />
+            <span>ขยาย QR Code ({activeQrDept})</span>
           </button>
           <button
+            type="button"
             onClick={handleExport}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center shadow-sm transition-colors"
+            className="flex-1 sm:flex-initial bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center justify-center shadow-xs transition-colors whitespace-nowrap"
           >
-            <Download className="w-4 h-4 mr-2" />
-            Export Excel
+            <Download className="w-4 h-4 mr-1.5" />
+            <span>Export Excel</span>
           </button>
         </div>
       </div>
@@ -523,7 +546,7 @@ export function Dashboard() {
             )}
 
             <div className="p-6 sm:p-8 bg-slate-50 flex flex-col items-center">
-              {isQrCheckInOpen ? (
+              {qrWindow.isOpen ? (
                 <>
                   <div className="w-[min(76vw,420px)] h-[min(76vw,420px)] bg-white rounded-3xl p-6 border-4 border-blue-500 shadow-xl flex items-center justify-center">
                     {qrUrl && <QRCode value={qrUrl} size={380} className="w-full h-full text-slate-900" />}
@@ -538,13 +561,28 @@ export function Dashboard() {
                     </p>
                   </div>
                 </>
+              ) : qrWindow.isBeforeStart ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center animate-in fade-in">
+                  <div className="w-20 h-20 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4">
+                    <Clock className="w-10 h-10" />
+                  </div>
+                  <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 mb-2">
+                    <Clock className="w-3.5 h-3.5 mr-1.5" />
+                    รอเปิดเช็คอินเวลา {qrWindow.startLabel} น.
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900">ยังไม่ถึงเวลาเปิดเช็คอิน (แผนก {activeQrDept})</h3>
+                  <p className="text-slate-500 mt-2 max-w-xs text-sm">
+                    ช่วงเวลาเข้าประชุมของแผนก {activeQrDept} คือ <strong>{activeQrTimeRange} น.</strong><br />
+                    ระบบจะเปิดแสดง QR Code อัตโนมัติเมื่อถึงเวลา <strong>{qrWindow.startLabel} น.</strong>
+                  </p>
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-8 text-center">
                   <div className="w-20 h-20 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-4">
                     <Clock className="w-10 h-10" />
                   </div>
                   <h3 className="text-xl font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {activeQrDept})</h3>
-                  <p className="text-slate-500 mt-2 max-w-xs">
+                  <p className="text-slate-500 mt-2 max-w-xs text-sm">
                     เลยกำหนดเวลาเข้าประชุมของแผนก {activeQrDept} ({activeQrTimeRange} น.) หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ
                   </p>
                 </div>
@@ -556,7 +594,7 @@ export function Dashboard() {
                 className="mt-6 inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-sm transition-colors"
               >
                 <Minimize2 className="w-4 h-4 text-blue-400" />
-                <span>{isQrCheckInOpen ? 'ย่อขนาด QR Code' : 'ปิดหน้าต่าง'}</span>
+                <span>{qrWindow.isOpen ? 'ย่อขนาด QR Code' : 'ปิดหน้าต่าง'}</span>
               </button>
             </div>
           </div>

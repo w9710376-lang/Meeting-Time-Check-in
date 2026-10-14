@@ -35,6 +35,7 @@ function ClayAvatarBust({
   facing = 'center',
   hasGlasses = false,
 }: {
+  key?: React.Key;
   x: number;
   y: number;
   scale?: number;
