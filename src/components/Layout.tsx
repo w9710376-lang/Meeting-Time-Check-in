@@ -87,7 +87,7 @@ export function Layout() {
   return (
     <div className="flex flex-col lg:flex-row h-[100dvh] w-full bg-gradient-to-br from-slate-100 via-slate-50 to-blue-50/40 font-sans text-slate-900 overflow-hidden">
       {/* Desktop Sidebar (lg and up) */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white border-r border-slate-800/80">
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 desktop-only-sidebar bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white border-r border-slate-800/80">
         <div className="p-6 flex items-center space-x-3">
           <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-xl shrink-0">
             M
@@ -142,9 +142,12 @@ export function Layout() {
       </aside>
 
       {/* Main Content Area (100% width on mobile) */}
-      <main className="flex-1 flex flex-col w-full min-w-0 overflow-hidden">
-        <header className="h-14 lg:h-16 bg-white border-b border-slate-200 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 shadow-xs shrink-0">
-          <div className="flex items-center gap-2.5 min-w-0">
+      <main className="flex-1 flex flex-col w-full min-w-0 overflow-hidden relative z-0">
+        <header className="h-14 lg:h-16 bg-white border-b border-slate-200 px-3.5 sm:px-6 lg:px-8 flex items-center justify-between gap-2 shadow-xs shrink-0 relative z-10">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <div className="lg:hidden w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+              M
+            </div>
             <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-800 truncate">
               {activeTab === 'dashboard'
                 ? 'Executive Dashboard'

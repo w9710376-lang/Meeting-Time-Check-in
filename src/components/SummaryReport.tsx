@@ -5,7 +5,7 @@ import { CheckIn, Employee, Department } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, parseISO } from 'date-fns';
 import { th } from 'date-fns/locale';
-import { Calendar, Download, BarChart2, CheckCircle2, Clock, CalendarDays, CalendarX, ChevronLeft, ChevronRight, UserX, Users, Search, X } from 'lucide-react';
+import { Calendar, Download, BarChart2, CheckCircle2, Clock, CalendarDays, CalendarX, ChevronLeft, ChevronRight, UserX, Users, Search, X, ShieldCheck, Smartphone, Award, FileSpreadsheet } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 import { getPeriodCalendarBreakdown, isWorkingDay } from '../lib/thaiHolidays';
@@ -99,6 +99,9 @@ export function SummaryReport() {
   const [activeOverviewCategory, setActiveOverviewCategory] = useState<OverviewCategory | null>(null);
   const [modalSearchQuery, setModalSearchQuery] = useState<string>('');
   const [tableCategoryFilter, setTableCategoryFilter] = useState<'ALL' | OverviewCategory>('ALL');
+  const [selectedEmployeeDetail, setSelectedEmployeeDetail] = useState<any | null>(null);
+  const [detailTimelineFilter, setDetailTimelineFilter] = useState<'ALL' | 'on-time' | 'late' | 'missing' | 'skip'>('ALL');
+  const [detailTimelineSearch, setDetailTimelineSearch] = useState<string>('');
 
   useEffect(() => {
     const unsubSettings = onSnapshot(
@@ -119,15 +122,16 @@ export function SummaryReport() {
   }, []);
 
   useEffect(() => {
-    if (!activeOverviewCategory) return;
+    if (!activeOverviewCategory && !selectedEmployeeDetail) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setActiveOverviewCategory(null);
+        setSelectedEmployeeDetail(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeOverviewCategory]);
+  }, [activeOverviewCategory, selectedEmployeeDetail]);
 
   useEffect(() => {
     setSelectedDept(scopedDept || 'ALL');
@@ -388,10 +392,43 @@ export function SummaryReport() {
         }
       });
 
+      // Day-by-day timeline for individual history view (newest first)
+      const dailyTimeline = [...trackedDates].reverse().map(dateStr => {
+        const c = empCheckIns.find(item => item.dateStr === dateStr);
+        const isScanned = Boolean(c);
+        let parsedDate = new Date();
+        try {
+          parsedDate = parseISO(dateStr);
+        } catch {
+          // fallback
+        }
+        const delayMins = c ? getCheckInDelayMinutes(c, empDept, defaultTimeRange, deptTimeRanges) : 0;
+        const isLate = c?.status === 'late' || delayMins > 0;
+        const status: 'on-time' | 'late' | 'missing' = !c ? 'missing' : isLate ? 'late' : 'on-time';
+        return {
+          dateStr,
+          fullDateLabel: format(parsedDate, 'EEEEที่ d MMMM yyyy', { locale: th }),
+          shortDateLabel: format(parsedDate, 'EEE d MMM', { locale: th }),
+          isScanned,
+          checkIn: c || null,
+          status,
+          scanTime: c?.timestamp ? format(new Date(c.timestamp), 'HH:mm:ss') : '-',
+          delayMinutes: delayMins,
+          earnedPoints: c?.earnedPoints ?? 0,
+          meetingStatus: c ? (c.meetingStatus === 'join' ? 'join' : c.meetingStatus === 'skip' ? 'skip' : 'unknown') : 'missing',
+          skipReason: c?.skipReason || '',
+          deviceId: c?.deviceId || '-',
+          deviceLabel: c?.deviceLabel || '-',
+        };
+      });
+
       return {
         id: emp.id,
         name: emp.name,
         department: emp.department || 'IE',
+        employeeRaw: emp,
+        empCheckIns,
+        dailyTimeline,
         designatedTimeRange: empDesignatedTimeRange,
         totalPoints: monthlyPoints,
         requiredDays: trackedDates.length,
@@ -544,6 +581,60 @@ export function SummaryReport() {
       XLSX.writeFile(wb, `TimeSync_Summary_${selectedDept}_${period}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
     } catch (error) {
       console.error("Error exporting to Excel:", error);
+    }
+  };
+
+  const handleExportSingleEmployee = (empData: any) => {
+    try {
+      if (!empData?.dailyTimeline) return;
+      const rows = empData.dailyTimeline.map((item: any, idx: number) => ({
+        'ลำดับ': idx + 1,
+        'วันที่': item.dateStr,
+        'วันในสัปดาห์': item.fullDateLabel,
+        'สถานะการเช็คอิน':
+          item.status === 'on-time'
+            ? 'ตรงเวลา (+10 คะแนน)'
+            : item.status === 'late'
+            ? `สาย (+5 คะแนน, ล่าช้า ${item.delayMinutes} นาที)`
+            : 'ไม่ได้สแกน (ขาด)',
+        'เวลาที่สแกน': item.scanTime,
+        'คะแนนที่ได้รับ': item.earnedPoints,
+        'การเข้าร่วมประชุมเช้า':
+          item.meetingStatus === 'join'
+            ? 'เข้าร่วมประชุม'
+            : item.meetingStatus === 'skip'
+            ? 'ไม่เข้าร่วม (ติดภารกิจ)'
+            : 'ขาดสแกน',
+        'เหตุผลที่ไม่เข้าประชุม': item.skipReason || '-',
+        'ชื่ออุปกรณ์ / รุ่น': item.deviceLabel || '-',
+        'รหัสประจำอุปกรณ์ (Device ID)': item.deviceId || '-',
+        'การตรวจสอบความปลอดภัย': item.isScanned ? 'ปกติ (Verified 1:1)' : '-'
+      }));
+
+      const summaryOverview = [
+        { 'หัวข้อสรุป': 'ชื่อ - นามสกุล', 'รายละเอียด': empData.name },
+        { 'หัวข้อสรุป': 'แผนก', 'รายละเอียด': empData.department },
+        { 'หัวข้อสรุป': 'ช่วงเวลาเข้าประชุมเป้าหมาย', 'รายละเอียด': `${empData.designatedTimeRange} น.` },
+        { 'หัวข้อสรุป': `คะแนนสะสมรายเดือน (${monthShortLabel})`, 'รายละเอียด': `${empData.totalPoints} คะแนน` },
+        { 'หัวข้อสรุป': 'วันที่ต้องสแกนในรอบนี้ (วันทำการ)', 'รายละเอียด': `${empData.requiredDays} วัน` },
+        { 'หัวข้อสรุป': 'มาสแกนสำเร็จ', 'รายละเอียด': `${empData.total} วัน` },
+        { 'หัวข้อสรุป': 'ไม่ได้สแกน', 'รายละเอียด': `${empData.missingDays} วัน` },
+        { 'หัวข้อสรุป': 'ตรงเวลา', 'รายละเอียด': `${empData.onTime} วัน` },
+        { 'หัวข้อสรุป': 'มาสาย', 'รายละเอียด': `${empData.late} วัน` },
+        { 'หัวข้อสรุป': 'เวลาล่าช้าเฉลี่ย', 'รายละเอียด': `${empData.avgDelayMinutes} นาที` },
+        { 'หัวข้อสรุป': 'เวลาล่าช้าสูงสุด', 'รายละเอียด': `${empData.maxDelayMinutes} นาที` },
+        { 'หัวข้อสรุป': 'เข้าร่วมประชุมเช้า', 'รายละเอียด': `${empData.joinMeeting} วัน` },
+        { 'หัวข้อสรุป': 'ไม่เข้าร่วมประชุมเช้า (ติดภารกิจ)', 'รายละเอียด': `${empData.skipMeeting} วัน` },
+      ];
+
+      const wsOverview = XLSX.utils.json_to_sheet(summaryOverview);
+      const wsTimeline = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, wsOverview, "Employee_Summary");
+      XLSX.utils.book_append_sheet(wb, wsTimeline, "Daily_History");
+      XLSX.writeFile(wb, `ScanHistory_${empData.name}_${empData.department}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+    } catch (error) {
+      console.error("Error exporting individual scan history:", error);
     }
   };
 

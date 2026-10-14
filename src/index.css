@@ -1,4 +1,11 @@
 @import "tailwindcss";
+ 
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
 
 html,
 body,
@@ -8,5 +15,17 @@ body,
   margin: 0;
   padding: 0;
   overflow-x: hidden;
+}
+
+/* Ensure desktop sidebar is NEVER visible or taking space on mobile screens (< 1024px) */
+@media (max-width: 1023.98px) {
+  aside {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    position: absolute !important;
+    pointer-events: none !important;
+    visibility: hidden !important;
+  }
 }
 
