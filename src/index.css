@@ -17,15 +17,26 @@ body,
   overflow-x: hidden;
 }
 
-/* Ensure desktop sidebar is NEVER visible or taking space on mobile screens (< 1024px) */
+/* Ensure desktop sidebar is NEVER visible, taking space, or obstructing on mobile screens (< 1024px) */
 @media (max-width: 1023.98px) {
-  aside {
+  aside,
+  .desktop-only-sidebar {
     display: none !important;
     width: 0 !important;
     height: 0 !important;
+    max-width: 0 !important;
+    max-height: 0 !important;
     position: absolute !important;
+    top: -9999px !important;
+    left: -9999px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    opacity: 0 !important;
     pointer-events: none !important;
     visibility: hidden !important;
+    overflow: hidden !important;
   }
 }
+
 

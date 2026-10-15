@@ -441,8 +441,18 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
   }, []);
 
   const handleScanSuccess = () => {
+    if (!checkInWindow.isOpen) {
+      return;
+    }
     setStep('select-name');
   };
+
+  // Keep select-name step strictly synchronized with the meeting check-in window (like QR code)
+  useEffect(() => {
+    if (!isScanMode && (step === 'select-name' || step === 'meeting') && !checkInWindow.isOpen) {
+      setStep('scan');
+    }
+  }, [checkInWindow.isOpen, isScanMode, step]);
 
   // Validate Same-Day 1-Device-1-Person Security (prevents buddy-punching on the same phone today while avoiding false collisions across iPhones/browsers)
   const validateScanDeviceSecurity = (
@@ -1034,18 +1044,6 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
               )}
             </div>
           )}
-
-          {step === 'scan' && (
-            <button
-              type="button"
-              onClick={handleScanSuccess}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-xs transition-colors cursor-pointer"
-              title="ค้นหารายชื่อเพื่อเช็คอินด้วยตนเอง"
-            >
-              <Search className="w-3.5 h-3.5 text-cyan-200" />
-              <span>ค้นหารายชื่อ ({selectedDept})</span>
-            </button>
-          )}
         </div>
       </div>
       
@@ -1070,7 +1068,7 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                   </div>
                 </div>
 
-                {/* Primary Action Buttons: 1. Big Blue "Search Name" + 2. "Expand QR" */}
+                {/* Primary Action Buttons: Active only when meeting check-in is open */}
                 <div className="w-full max-w-xs flex flex-col gap-2 mb-2">
                   <button
                     type="button"
@@ -1093,11 +1091,11 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
 
                 <h3 className="text-sm font-bold text-slate-800">สแกน QR Code แผนก {selectedDept}</h3>
                 <p className="text-slate-500 text-xs mt-0.5 text-center max-w-xs">
-                  นำกล้องจ่อที่ QR Code หน้าห้องประชุม หรือแตะปุ่มสีฟ้าด้านบนเพื่อค้นหารายชื่อ
+                  นำกล้องจ่อที่ QR Code หน้าห้องประชุม หรือแตะปุ่มค้นหารายชื่อเพื่อเช็คอิน
                 </p>
               </>
             ) : checkInWindow.isBeforeStart ? (
-              <div className="flex flex-col items-center justify-center py-6 text-center animate-in fade-in w-full">
+              <div className="flex flex-col items-center justify-center py-8 text-center animate-in fade-in w-full">
                 <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-3 shadow-xs">
                   <Clock className="w-8 h-8" />
                 </div>
@@ -1106,50 +1104,25 @@ export function CheckIn({ onComplete }: { onComplete?: () => void }) {
                   รอเปิดเช็คอินเวลา {checkInWindow.startLabel} น.
                 </div>
                 <h3 className="text-lg font-bold text-slate-900">ยังไม่ถึงเวลาเปิดเช็คอิน (แผนก {selectedDept})</h3>
-                <p className="text-slate-500 mt-1 max-w-xs text-xs">
+                <p className="text-slate-500 mt-2 max-w-xs text-xs leading-relaxed">
                   ช่วงเวลาเข้าประชุมของแผนก {selectedDept} คือ <strong>{targetTimeRange} น.</strong><br />
-                  ระบบจะเปิดแสดง QR Code อัตโนมัติเมื่อถึงเวลา <strong>{checkInWindow.startLabel} น.</strong>
+                  ระบบจะเปิดแสดง QR Code และเปิดเมนูค้นหารายชื่อพนักงานพร้อมกันเมื่อถึงเวลา <strong>{checkInWindow.startLabel} น.</strong>
                 </p>
-
-                {/* Primary Action Button: Always accessible to search/view names */}
-                <div className="mt-4 w-full max-w-xs">
-                  <button
-                    type="button"
-                    onClick={handleScanSuccess}
-                    className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-[0.99] text-white font-extrabold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-sm sm:text-base border border-blue-400/30 ring-2 ring-blue-500/20 cursor-pointer"
-                  >
-                    <Search className="w-4 h-4 text-cyan-200 shrink-0" />
-                    <span>ค้นหารายชื่อพนักงาน (แผนก {selectedDept})</span>
-                  </button>
-                  <p className="text-[11px] text-slate-400 mt-1 text-center">
-                    แตะเพื่อตรวจสอบรายชื่อผู้ที่ยังไม่ได้เช็คอิน
-                  </p>
-                </div>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-6 text-center w-full">
-                <div className="w-16 h-16 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-3">
+              <div className="flex flex-col items-center justify-center py-8 text-center w-full">
+                <div className="w-16 h-16 bg-slate-200 text-slate-500 rounded-full flex items-center justify-center mb-3 shadow-xs">
                   <Clock className="w-8 h-8" />
                 </div>
-                <h3 className="text-lg font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {selectedDept})</h3>
-                <p className="text-slate-500 mt-1 max-w-xs text-xs">
-                  เลยกำหนดเวลาเข้าประชุมของแผนก {selectedDept} ({targetTimeRange} น.) หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ
-                </p>
-
-                {/* Primary Action Button: Always accessible to search/view names */}
-                <div className="mt-4 w-full max-w-xs">
-                  <button
-                    type="button"
-                    onClick={handleScanSuccess}
-                    className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-[0.99] text-white font-extrabold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-sm sm:text-base border border-blue-400/30 ring-2 ring-blue-500/20 cursor-pointer"
-                  >
-                    <Search className="w-4 h-4 text-cyan-200 shrink-0" />
-                    <span>ค้นหารายชื่อพนักงาน (แผนก {selectedDept})</span>
-                  </button>
-                  <p className="text-[11px] text-slate-400 mt-1 text-center">
-                    แตะเพื่อค้นหารายชื่อหรือตรวจสอบสถานะการเช็คอิน
-                  </p>
+                <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-700 mb-2">
+                  <Clock className="w-3.5 h-3.5 mr-1.5" />
+                  สิ้นสุดเวลาเช็คอินแล้ว
                 </div>
+                <h3 className="text-lg font-bold text-slate-900">หมดเวลาเช็คอิน (แผนก {selectedDept})</h3>
+                <p className="text-slate-500 mt-2 max-w-xs text-xs leading-relaxed">
+                  เลยกำหนดเวลาเข้าประชุมของแผนก {selectedDept} ({targetTimeRange} น.)<br />
+                  ระบบได้ปิดรับการสแกน QR Code และปิดเมนูค้นหารายชื่อเช็คอินแล้ว หากมีเหตุจำเป็น กรุณาติดต่อผู้ดูแลระบบ
+                </p>
               </div>
             )}
           </div>

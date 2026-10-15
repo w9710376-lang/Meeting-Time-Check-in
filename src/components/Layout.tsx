@@ -35,6 +35,18 @@ export function Layout() {
     }
   }, [isKiosk, profile?.id]);
 
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(min-width: 1024px)');
+    const listener = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    media.addEventListener('change', listener);
+    return () => media.removeEventListener('change', listener);
+  }, []);
+
   const scopeLabel =
     !profile?.departmentScope || profile.departmentScope === 'ALL'
       ? 'ทุกแผนก (ALL)'
@@ -86,68 +98,74 @@ export function Layout() {
 
   return (
     <div className="flex flex-col lg:flex-row h-[100dvh] w-full bg-gradient-to-br from-slate-100 via-slate-50 to-blue-50/40 font-sans text-slate-900 overflow-hidden">
-      {/* Desktop Sidebar (lg and up) */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 desktop-only-sidebar bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white border-r border-slate-800/80">
-        <div className="p-6 flex items-center space-x-3">
-          <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-xl shrink-0">
-            M
-          </div>
-          <span className="text-lg font-bold tracking-tight whitespace-nowrap">Meeting Check-in</span>
-        </div>
-        <nav className="flex-1 px-4 py-4 space-y-2">
-          {visibleNavItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleSelectTab(item.id)}
-                className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-colors ${
-                  activeTab === item.id
-                    ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
-                    : 'text-slate-400 hover:bg-slate-800'
-                }`}
-              >
-                <Icon className="w-5 h-5 shrink-0" />
-                <span className="font-medium whitespace-nowrap">{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="p-4 border-t border-slate-800 space-y-3">
-          <div className="flex items-center space-x-3 overflow-hidden">
-            <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-sm font-bold flex-shrink-0">
-              {profile?.name?.charAt(0)?.toUpperCase() || 'U'}
-            </div>
-            <div className="truncate">
-              <p className="text-sm font-semibold truncate">{profile?.name}</p>
-              <p className="text-xs text-slate-400 truncate">
-                {profile?.appRole === 'super_admin'
-                  ? 'Super Admin (ผู้ดูแลระบบกลาง)'
-                  : profile?.appRole === 'dept_manager'
-                  ? scopeLabel
-                  : 'QR Kiosk'}
-              </p>
-            </div>
-          </div>
-
-          <button
-            onClick={logout}
-            className="w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white text-xs font-bold transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>สลับบัญชี / ออกจากระบบ</span>
-          </button>
-        </div>
-      </aside>
-
-      {/* Main Content Area (100% width on mobile) */}
-      <main className="flex-1 flex flex-col w-full min-w-0 overflow-hidden relative z-0">
-        <header className="h-14 lg:h-16 bg-white border-b border-slate-200 px-3.5 sm:px-6 lg:px-8 flex items-center justify-between gap-2 shadow-xs shrink-0 relative z-10">
-          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-            <div className="lg:hidden w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+      {/* Desktop Sidebar (Rendered ONLY on lg screen and up) */}
+      {isDesktop && (
+        <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 desktop-only-sidebar bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950 text-white border-r border-slate-800/80">
+          <div className="p-6 flex items-center space-x-3">
+            <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-xl shrink-0">
               M
             </div>
+            <span className="text-lg font-bold tracking-tight whitespace-nowrap">Meeting Check-in</span>
+          </div>
+          <nav className="flex-1 px-4 py-4 space-y-2">
+            {visibleNavItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => handleSelectTab(item.id)}
+                  className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-colors ${
+                    activeTab === item.id
+                      ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
+                      : 'text-slate-400 hover:bg-slate-800'
+                  }`}
+                >
+                  <Icon className="w-5 h-5 shrink-0" />
+                  <span className="font-medium whitespace-nowrap">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="p-4 border-t border-slate-800 space-y-3">
+            <div className="flex items-center space-x-3 overflow-hidden">
+              <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-sm font-bold flex-shrink-0">
+                {profile?.name?.charAt(0)?.toUpperCase() || 'U'}
+              </div>
+              <div className="truncate">
+                <p className="text-sm font-semibold truncate">{profile?.name}</p>
+                <p className="text-xs text-slate-400 truncate">
+                  {profile?.appRole === 'super_admin'
+                    ? 'Super Admin (ผู้ดูแลระบบกลาง)'
+                    : profile?.appRole === 'dept_manager'
+                    ? scopeLabel
+                    : 'QR Kiosk'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={logout}
+              className="w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white text-xs font-bold transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>สลับบัญชี / ออกจากระบบ</span>
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {/* Main Content Area (100% clean width on mobile) */}
+      <main className="flex-1 flex flex-col w-full min-w-0 overflow-hidden relative z-0">
+        <header
+          className="min-h-14 lg:h-16 bg-white border-b border-slate-200 px-3.5 sm:px-6 lg:px-8 flex items-center justify-between gap-2 shadow-xs shrink-0 relative z-10"
+          style={{
+            paddingTop: 'env(safe-area-inset-top, 0px)',
+            paddingLeft: 'calc(0.875rem + env(safe-area-inset-left, 0px))',
+            paddingRight: 'calc(0.875rem + env(safe-area-inset-right, 0px))',
+          }}
+        >
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
             <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-800 truncate">
               {activeTab === 'dashboard'
                 ? 'Executive Dashboard'
@@ -183,8 +201,8 @@ export function Layout() {
         <div
           className={`flex-1 overflow-y-auto overflow-x-hidden w-full max-w-full min-w-0 ${
             activeTab === 'checkin'
-              ? 'p-0 sm:p-4 lg:p-8 pb-16 lg:pb-8 flex flex-col'
-              : 'p-3 sm:p-5 lg:p-8 pb-20 lg:pb-8'
+              ? 'p-0 sm:p-4 lg:p-8 pb-20 lg:pb-8 flex flex-col'
+              : 'p-3 sm:p-5 lg:p-8 pb-24 lg:pb-8'
           }`}
         >
           <Suspense
@@ -210,7 +228,13 @@ export function Layout() {
 
         {/* Mobile Bottom Tab Bar (< lg) */}
         {visibleNavItems.length > 1 && (
-          <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 flex items-center justify-around h-14 px-1 shadow-lg">
+          <nav
+            className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 flex items-center justify-around px-1 shadow-lg"
+            style={{
+              paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+              height: 'calc(3.5rem + env(safe-area-inset-bottom, 0px))',
+            }}
+          >
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
